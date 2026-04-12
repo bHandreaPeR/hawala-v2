@@ -1,0 +1,9 @@
+growwapi
+pandas
+numpy
+scipy
+matplotlib
+scikit-learn
+yfinance
+nselib
+xlrd
