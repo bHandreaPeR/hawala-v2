@@ -10,10 +10,11 @@
 #   that level and set new TP = old TP + STEP_PTS.
 #   Locks in profit while letting winners run further.
 #
-# Validated results (1 lot, 15 units):
-#   2022: ₹92,362  | 2023: ₹91,984
-#   2024: ₹90,183  | 2025: ₹116,406  ← out-of-sample
-#   4-year total  : ₹405,936
+# Validated results (rolling futures, time-varying lot size):
+#   2022: ₹1,47,456 (170 trades, lot=25) | 2023: ₹72,543 (142 trades, lot=25→15)
+#   2024: ₹24,038   ( 92 trades, lot=15) | Total: ₹2,44,038
+#   Win rate: 42.8% | Exit: SL 57% · TRAIL 41% · SQOFF 2.5%
+#   Edge decaying: avg/trade ₹867 (2022) → ₹261 (2024) — run OOS 2025 test
 #
 # Refactored from cell_3_gap_fill_strategy.py:
 #   - Instrument and strategy params injected via dicts (no hardcoding)
@@ -224,3 +225,81 @@ def run_gap_fill(data: pd.DataFrame,
         })
 
     return pd.DataFrame(records)
+
+
+def gap_fill_parameter_sweep(data: pd.DataFrame,
+                              instrument_config: dict,
+                              step_range=None,
+                              stop_range=None) -> pd.DataFrame:
+    """
+    Sweep STEP_PTS and STOP_PTS to find optimal gap fill parameters.
+
+    Designed to be run independently per year-slice to detect parameter drift:
+        data_2022 = data[data.index.year == 2022]
+        sweep_2022 = gap_fill_parameter_sweep(data_2022, instrument_config)
+
+    Args:
+        data             : 15-min OHLCV DataFrame (full range or year-slice)
+        instrument_config: dict from config.INSTRUMENTS[instrument]
+        step_range       : list of STEP_PTS values to try (default: 25–150 in 25-pt steps)
+        stop_range       : list of STOP_PTS values to try (default: 40–160 in 20-pt steps)
+
+    Returns:
+        pd.DataFrame: Sorted by total_pl descending with all combo metrics.
+    """
+    if step_range is None:
+        step_range = [25, 50, 75, 100, 125, 150]
+    if stop_range is None:
+        stop_range = [40, 60, 80, 100, 120, 140, 160]
+
+    total  = len(step_range) * len(stop_range)
+    print(f"Running Gap Fill parameter sweep ({total} combos)...")
+
+    results = []
+    for step in step_range:
+        for stop in stop_range:
+            df = run_gap_fill(data, instrument_config,
+                              strategy_params={'STEP_PTS': step, 'STOP_PTS': stop})
+            if df.empty or len(df) < 5:
+                continue
+            results.append({
+                'STEP_PTS':  step,
+                'STOP_PTS':  stop,
+                'trades':    len(df),
+                'win_rate':  df['win'].mean() * 100,
+                'total_pl':  df['pnl_rs'].sum(),
+                'avg_pl':    df['pnl_rs'].mean(),
+                'pf':        (df[df['pnl_rs'] > 0]['pnl_rs'].sum() /
+                              abs(df[df['pnl_rs'] < 0]['pnl_rs'].sum()))
+                             if (df['pnl_rs'] < 0).any() else float('inf'),
+            })
+
+    if not results:
+        print("No valid parameter combinations found.")
+        return pd.DataFrame()
+
+    res_df = pd.DataFrame(results).sort_values('total_pl', ascending=False)
+
+    print(f"\n  GAP FILL SWEEP — Top 15 by Total P&L")
+    print(f"  {'STEP':>5} {'STOP':>5} {'Trades':>7} {'WinRate':>8} "
+          f"{'TotalP&L':>12} {'Avg/Trade':>10} {'PF':>6}")
+    print(f"  {'-'*60}")
+    for _, row in res_df.head(15).iterrows():
+        print(f"  {row['STEP_PTS']:>5.0f} {row['STOP_PTS']:>5.0f} "
+              f"{row['trades']:>7.0f}  {row['win_rate']:>7.1f}%  "
+              f"₹{row['total_pl']:>10,.0f}  ₹{row['avg_pl']:>8,.0f}  "
+              f"{row['pf']:>5.2f}x")
+
+    # Highlight the default params for comparison
+    default = res_df[(res_df['STEP_PTS'] == 75) & (res_df['STOP_PTS'] == 80)]
+    if not default.empty:
+        r = default.iloc[0]
+        rank = res_df.reset_index(drop=True).index[
+            (res_df['STEP_PTS'] == 75) & (res_df['STOP_PTS'] == 80)
+        ].tolist()
+        rank_n = rank[0] + 1 if rank else '?'
+        print(f"\n  Default params (STEP=75, STOP=80): "
+              f"rank #{rank_n}/{len(res_df)} | "
+              f"₹{r['total_pl']:,.0f} total | {r['win_rate']:.1f}% WR")
+
+    return res_df
