@@ -196,6 +196,106 @@ def run_priority_3(groww, gap_fill_log=None):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ORB ATR sweep — validate the structural fix
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_orb_atr_sweep(data=None, groww=None):
+    """
+    Run the new ATR-based ORB sweep and compare against legacy range-based results.
+
+    Pass pre-fetched futures data to skip API calls:
+        run_orb_atr_sweep(data=data)
+
+    Or let it fetch:
+        run_orb_atr_sweep(groww=groww)
+    """
+    from strategies.orb import orb_parameter_sweep
+    from config import INSTRUMENTS
+
+    cfg = INSTRUMENTS['BANKNIFTY']
+
+    if data is None:
+        if groww is None:
+            raise ValueError("Pass either data= or groww=")
+        print("Fetching BANKNIFTY futures 2022-2024...")
+        data = fetch_instrument('BANKNIFTY', '2022-01-01', '2024-12-31',
+                                groww=groww, use_futures=True)
+
+    print("\n" + "="*65)
+    print("  ORB ATR STOP SWEEP (vs legacy range-based stops)")
+    print("="*65)
+
+    # ATR mode only (faster; legacy already confirmed negative)
+    sweep = orb_parameter_sweep(data, cfg, mode='atr')
+
+    if sweep.empty:
+        print("❌ No results.")
+        return sweep
+
+    best = sweep.iloc[0]
+    print(f"\n  ── Best ATR combo ──────────────────────────────────────────")
+    print(f"  Window: {best['window']} | stop_atr: {best['stop_atr']:.2f} | "
+          f"target_atr: {best['target_atr']:.2f} | buffer: {best['buffer']:.0f}")
+    print(f"  {best['trades']:.0f} trades | {best['win_rate']:.1f}% WR | "
+          f"₹{best['total_pl']:,.0f} total | ₹{best['avg_pl']:,.0f} avg/trade")
+
+    # Update config suggestion
+    if best['total_pl'] > 0:
+        print(f"\n  ✅ ATR stops are profitable. Update config.py:")
+        print(f"     'ORB_STOP_ATR':   {best['stop_atr']}")
+        print(f"     'ORB_TARGET_ATR': {best['target_atr']}")
+        print(f"     'ORB_WINDOW_END': '{best['window']}'")
+        print(f"     'ORB_BREAKOUT_BUFFER': {best['buffer']:.0f}")
+    else:
+        print(f"\n  ❌ Even ATR stops can't find edge on BANKNIFTY ORB. "
+              f"Consider NIFTY or dropping ORB entirely.")
+
+    return sweep
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# NIFTY validation — parallel instrument backtest
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_nifty_validation(groww):
+    """
+    Run all three strategies on NIFTY 2022-2024 to check if:
+    1. Gap fill edge survived longer on NIFTY (less HFT, different composition)
+    2. ORB with ATR stops works on NIFTY
+    3. VWAP reversion on no-gap days works on NIFTY
+
+    This is the instrument diversification test.
+    """
+    print("\n" + "="*65)
+    print("  NIFTY VALIDATION — INSTRUMENT DIVERSIFICATION TEST")
+    print("="*65)
+
+    START = '2022-01-01'
+    END   = '2024-12-31'
+    logs  = {}
+
+    for strategy in ('gap_fill', 'orb', 'vwap_reversion'):
+        print(f"\n── NIFTY {strategy} (2022-2024) ──")
+        log = run_backtest(strategy, 'NIFTY', START, END,
+                           groww=groww, use_futures=True, apply_macros=True)
+        if not log.empty:
+            print_strategy_report(log, strategy_name=f'NIFTY {strategy.upper()}')
+            logs[strategy] = log
+        else:
+            print(f"  ⚠ No trades for {strategy} on NIFTY")
+
+    if len(logs) >= 2:
+        from config import CAPITAL as CAPITAL_CFG
+        print("\n── NIFTY Combined ──")
+        combined = combine_strategies(logs,
+                                      capital=CAPITAL_CFG.get('starting', 1_00_000))
+        print_combined_report(combined, capital=CAPITAL_CFG.get('starting', 1_00_000))
+        logs['combined'] = combined
+
+    return logs
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Full run helper
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -236,37 +336,32 @@ def run_all(groww, gap_fill_log_2022_2024=None):
 # ══════════════════════════════════════════════════════════════════════════════
 
 QUICK_REFERENCE = """
-# ── P1: OOS 2025 test ────────────────────────────────────────────────────────
-from run_next_steps import run_priority_1
-log_2025 = run_priority_1(groww)
+# ── ORB ATR sweep (validate structural fix — no API needed if data is loaded) ─
+from run_next_steps import run_orb_atr_sweep
+orb_sweep = run_orb_atr_sweep(data=data)           # data = futures 2022-2024
 
-# ── P2: Parameter sweep (pass pre-fetched data to skip API calls) ────────────
-from run_next_steps import run_priority_2
-sweeps = run_priority_2(groww, data=data)          # data = futures 2022-2024
-
-# ── P2: Manual per-year sweep ────────────────────────────────────────────────
-from strategies.gap_fill import gap_fill_parameter_sweep
-from config import INSTRUMENTS
-cfg = INSTRUMENTS['BANKNIFTY']
-sweep_2022 = gap_fill_parameter_sweep(data[data.index.year == 2022], cfg)
-sweep_2023 = gap_fill_parameter_sweep(data[data.index.year == 2023], cfg)
-sweep_2024 = gap_fill_parameter_sweep(data[data.index.year == 2024], cfg)
-
-# ── P3: ORB + VWAP + combine ─────────────────────────────────────────────────
+# ── Re-run combined portfolio with fixed ORB + optimal VWAP ──────────────────
 from run_next_steps import run_priority_3
-combined, orb_log, vwap_log = run_priority_3(groww, gap_fill_log=trade_log)
+combined, orb_log, vwap_log = run_priority_3(groww, gap_fill_log=None)
+# (pass gap_fill_log=None to skip dead gap fill; ORB+VWAP only)
 
-# ── ORB sweep (standalone) ────────────────────────────────────────────────────
-from strategies.orb import orb_parameter_sweep
-orb_sweep = orb_parameter_sweep(data, INSTRUMENTS['BANKNIFTY'])
+# ── NIFTY validation (different instrument, same strategies) ─────────────────
+from run_next_steps import run_nifty_validation
+nifty_logs = run_nifty_validation(groww)
 
-# ── VWAP sweep (standalone) ───────────────────────────────────────────────────
+# ── VWAP sweep — fine-tune band for NIFTY (different price level) ─────────────
 from strategies.vwap_reversion import vwap_parameter_sweep
-vwap_sweep = vwap_parameter_sweep(data, INSTRUMENTS['BANKNIFTY'])
+from config import INSTRUMENTS
+nifty_data = fetch_instrument('NIFTY', '2022-01-01', '2024-12-31', groww=groww, use_futures=True)
+vwap_sweep_nifty = vwap_parameter_sweep(nifty_data, INSTRUMENTS['NIFTY'])
 
-# ── Run everything at once ────────────────────────────────────────────────────
-from run_next_steps import run_all
-results = run_all(groww, gap_fill_log_2022_2024=trade_log)
+# ── ORB ATR sweep — also on NIFTY ─────────────────────────────────────────────
+from strategies.orb import orb_parameter_sweep
+orb_sweep_nifty = orb_parameter_sweep(nifty_data, INSTRUMENTS['NIFTY'], mode='atr')
+
+# ── BANKNIFTY ORB + VWAP combined (2022-2024, no gap fill) ───────────────────
+from run_next_steps import run_priority_3
+combined_bn, orb_bn, vwap_bn = run_priority_3(groww, gap_fill_log=None)
 """
 
 if __name__ == '__main__':

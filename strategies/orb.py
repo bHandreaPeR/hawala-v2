@@ -46,10 +46,17 @@ def run_orb(data: pd.DataFrame,
     MAX_GAP     = instrument_config.get('max_gap',   400)
 
     # ── Resolve strategy params (sweep overrides via params= arg) ─────────────
-    _window_end = params.get('window_end', strategy_params.get('ORB_WINDOW_END',      '09:45')) if params else strategy_params.get('ORB_WINDOW_END',      '09:45')
-    _stop_pct   = params.get('stop_pct',   strategy_params.get('ORB_STOP_PCT',        0.005))   if params else strategy_params.get('ORB_STOP_PCT',        0.005)
-    _target_r   = params.get('target_r',   strategy_params.get('ORB_TARGET_R',        2.0))     if params else strategy_params.get('ORB_TARGET_R',        2.0)
-    _buffer     = params.get('buffer',     strategy_params.get('ORB_BREAKOUT_BUFFER', 5))       if params else strategy_params.get('ORB_BREAKOUT_BUFFER', 5)
+    _window_end    = params.get('window_end',    strategy_params.get('ORB_WINDOW_END',      '09:45')) if params else strategy_params.get('ORB_WINDOW_END',      '09:45')
+    _stop_pct      = params.get('stop_pct',      strategy_params.get('ORB_STOP_PCT',        0.005))   if params else strategy_params.get('ORB_STOP_PCT',        0.005)
+    _target_r      = params.get('target_r',      strategy_params.get('ORB_TARGET_R',        2.0))     if params else strategy_params.get('ORB_TARGET_R',        2.0)
+    _buffer        = params.get('buffer',        strategy_params.get('ORB_BREAKOUT_BUFFER', 5))       if params else strategy_params.get('ORB_BREAKOUT_BUFFER', 5)
+    # ATR-based stop/target params — when use_atr_stops=True the ORB-range stop is
+    # replaced with a volatility-normalised stop (same pattern as VWAP reversion).
+    # Fixes the structural problem where ORB-range stops = 200-400 pts on gap days,
+    # making targets unreachable intraday and producing negative P&L despite 51% WR.
+    _use_atr_stops = params.get('use_atr_stops', strategy_params.get('ORB_USE_ATR_STOPS', True))  if params else strategy_params.get('ORB_USE_ATR_STOPS', True)
+    _stop_atr      = params.get('stop_atr',      strategy_params.get('ORB_STOP_ATR',      0.3))   if params else strategy_params.get('ORB_STOP_ATR',      0.3)
+    _target_atr    = params.get('target_atr',    strategy_params.get('ORB_TARGET_ATR',    0.6))   if params else strategy_params.get('ORB_TARGET_ATR',    0.6)
 
     # ── Regime lookup ─────────────────────────────────────────────────────────
     regime_lookup = {}
@@ -136,17 +143,27 @@ def run_orb(data: pd.DataFrame,
             if gap_direction == 1 and c_close > orb_high + _buffer:
                 entry     = c_close
                 direction = 1   # LONG
-                stop_loss = orb_low - (orb_size * _stop_pct)
-                stop_pts  = entry - stop_loss
-                target_pts= stop_pts * _target_r
+                if _use_atr_stops:
+                    # ATR-based: normalised risk regardless of ORB range width
+                    stop_pts   = atr14 * _stop_atr
+                    target_pts = atr14 * _target_atr
+                else:
+                    # Legacy ORB-range-based stop
+                    stop_loss  = orb_low - (orb_size * _stop_pct)
+                    stop_pts   = entry - stop_loss
+                    target_pts = stop_pts * _target_r
                 entry_ts  = fidx
                 break
             elif gap_direction == -1 and c_close < orb_low - _buffer:
                 entry     = c_close
                 direction = -1  # SHORT
-                stop_loss = orb_high + (orb_size * _stop_pct)
-                stop_pts  = stop_loss - entry
-                target_pts= stop_pts * _target_r
+                if _use_atr_stops:
+                    stop_pts   = atr14 * _stop_atr
+                    target_pts = atr14 * _target_atr
+                else:
+                    stop_loss  = orb_high + (orb_size * _stop_pct)
+                    stop_pts   = stop_loss - entry
+                    target_pts = stop_pts * _target_r
                 entry_ts  = fidx
                 break
 
@@ -246,51 +263,95 @@ def run_orb(data: pd.DataFrame,
 
 def orb_parameter_sweep(data: pd.DataFrame,
                         instrument_config: dict,
-                        regime_df=None) -> pd.DataFrame:
+                        regime_df=None,
+                        mode: str = 'atr') -> pd.DataFrame:
     """
     Sweep key ORB parameters to find optimal settings.
     Passes params via dict — no global mutation.
+
+    Args:
+        mode : 'atr'    → sweep ATR-based stops (new default, fixes structural problem)
+               'legacy' → sweep ORB-range-based stops (original broken mode)
+               'both'   → run both and combine into one sorted table
     """
-    windows   = ['09:30', '09:45', '10:00']
-    stop_pcts = [0.003, 0.005, 0.0075]
-    target_rs = [1.5, 2.0, 2.5, 3.0]
-    buffers   = [0, 5, 10]
-
     results = []
-    total   = len(windows) * len(stop_pcts) * len(target_rs) * len(buffers)
-    print(f"Running ORB parameter sweep ({total} combos)...")
 
-    for win in windows:
-        for sp in stop_pcts:
-            for tr in target_rs:
-                for buf in buffers:
-                    orb = run_orb(data, instrument_config,
-                                  strategy_params={},
-                                  regime_df=regime_df,
-                                  params={'window_end': win, 'stop_pct': sp,
-                                          'target_r': tr, 'buffer': buf})
-                    if orb.empty:
-                        continue
-                    results.append({
-                        'window': win, 'stop_pct': sp * 100,
-                        'target_r': tr, 'buffer': buf,
-                        'trades':   len(orb),
-                        'win_rate': orb['win'].mean() * 100,
-                        'total_pl': orb['pnl_rs'].sum(),
-                        'avg_pl':   orb['pnl_rs'].mean(),
-                    })
+    if mode in ('atr', 'both'):
+        windows    = ['09:30', '09:45', '10:00']
+        stop_atrs  = [0.25, 0.3, 0.4, 0.5]
+        target_atrs = [0.45, 0.6, 0.75, 1.0]   # target_pts = atr14 × target_atr
+        buffers    = [5, 10, 15]
+        total      = len(windows) * len(stop_atrs) * len(target_atrs) * len(buffers)
+        print(f"Running ORB ATR-stop sweep ({total} combos)...")
+
+        for win in windows:
+            for sa in stop_atrs:
+                for ta in target_atrs:
+                    for buf in buffers:
+                        orb = run_orb(data, instrument_config,
+                                      strategy_params={},
+                                      regime_df=regime_df,
+                                      params={'window_end': win,
+                                              'use_atr_stops': True,
+                                              'stop_atr': sa, 'target_atr': ta,
+                                              'buffer': buf})
+                        if orb.empty:
+                            continue
+                        results.append({
+                            'mode': 'ATR', 'window': win,
+                            'stop_atr': sa, 'target_atr': ta, 'buffer': buf,
+                            'stop_pct': None, 'target_r': None,
+                            'trades':   len(orb),
+                            'win_rate': orb['win'].mean() * 100,
+                            'total_pl': orb['pnl_rs'].sum(),
+                            'avg_pl':   orb['pnl_rs'].mean(),
+                        })
+
+    if mode in ('legacy', 'both'):
+        windows   = ['09:30', '09:45', '10:00']
+        stop_pcts = [0.003, 0.005, 0.0075]
+        target_rs = [1.5, 2.0, 2.5]
+        buffers   = [5, 10]
+        total     = len(windows) * len(stop_pcts) * len(target_rs) * len(buffers)
+        print(f"Running ORB legacy sweep ({total} combos)...")
+
+        for win in windows:
+            for sp in stop_pcts:
+                for tr in target_rs:
+                    for buf in buffers:
+                        orb = run_orb(data, instrument_config,
+                                      strategy_params={},
+                                      regime_df=regime_df,
+                                      params={'window_end': win,
+                                              'use_atr_stops': False,
+                                              'stop_pct': sp, 'target_r': tr,
+                                              'buffer': buf})
+                        if orb.empty:
+                            continue
+                        results.append({
+                            'mode': 'LEGACY', 'window': win,
+                            'stop_atr': None, 'target_atr': None, 'buffer': buf,
+                            'stop_pct': sp * 100, 'target_r': tr,
+                            'trades':   len(orb),
+                            'win_rate': orb['win'].mean() * 100,
+                            'total_pl': orb['pnl_rs'].sum(),
+                            'avg_pl':   orb['pnl_rs'].mean(),
+                        })
 
     if not results:
         print("No valid combinations found.")
         return pd.DataFrame()
 
     res_df = pd.DataFrame(results).sort_values('total_pl', ascending=False)
+
     print(f"\n  ORB SWEEP — Top 15 by Total P&L")
-    print(f"  {'Window':>7} {'Stop%':>6} {'TgtR':>5} {'Buf':>4} "
-          f"{'Trades':>7} {'WinRate':>8} {'TotalP&L':>12}")
+    print(f"  {'Mode':>6} {'Window':>7} {'StopATR':>8} {'TgtATR':>7} "
+          f"{'Buf':>4} {'Trades':>7} {'WinRate':>8} {'TotalP&L':>12}")
+    print(f"  {'-'*68}")
     for _, row in res_df.head(15).iterrows():
-        print(f"  {row['window']:>7}  {row['stop_pct']:>5.2f}%  "
-              f"{row['target_r']:>4.1f}  {row['buffer']:>4.0f}  "
-              f"{row['trades']:>7.0f}  {row['win_rate']:>7.1f}%  "
-              f"₹{row['total_pl']:>10,.0f}")
+        sa  = f"{row['stop_atr']:.2f}"   if row['stop_atr']  is not None else f"{row['stop_pct']:.2f}%"
+        ta  = f"{row['target_atr']:.2f}" if row['target_atr'] is not None else f"{row['target_r']:.1f}R"
+        print(f"  {row['mode']:>6} {row['window']:>7}  {sa:>8}  {ta:>7}  "
+              f"{row['buffer']:>4.0f}  {row['trades']:>7.0f}  "
+              f"{row['win_rate']:>7.1f}%  ₹{row['total_pl']:>10,.0f}")
     return res_df

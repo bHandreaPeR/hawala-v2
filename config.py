@@ -31,12 +31,17 @@ INSTRUMENTS = {
     'NIFTY': {
         'symbol':            'NSE-NIFTY',
         'underlying_symbol': 'NIFTY',
-        'lot_size':          25,
+        'lot_size':          25,               # current lot size
+        # NIFTY lot size history: changed 50→25 on 24-Nov-2023 per SEBI revision
+        'lot_size_history': [
+            ('2020-01-01', '2023-11-23', 50),  # 50 contracts/lot before revision
+            ('2023-11-24', '2099-12-31', 25),  # 25 contracts/lot after revision
+        ],
         'brokerage':         40,
         'slippage':          5,
-        'min_gap':           30,
+        'min_gap':           30,               # ~0.1% of NIFTY at 30,000
         'max_gap':           200,
-        'margin_per_lot':    55_000,
+        'margin_per_lot':    55_000,           # approx SPAN + exposure margin (₹)
         'strike_interval':   50,
     },
 }
@@ -58,20 +63,26 @@ STRATEGIES = {
         'module':   'strategies.orb',
         'function': 'run_orb',
         'params': {
-            'ORB_WINDOW_END':      '09:45',
-            'ORB_STOP_PCT':        0.005,    # 0.5% of ORB range
-            'ORB_TARGET_R':        2.0,      # 2x risk
-            'ORB_BREAKOUT_BUFFER': 5,        # pts above/below ORB boundary
+            'ORB_WINDOW_END':      '10:00',  # best window from legacy sweep
+            'ORB_BREAKOUT_BUFFER': 10,       # best buffer from legacy sweep
+            # ATR-based stops — fixes structural problem where ORB-range stops
+            # were 200-400 pts making targets unreachable intraday.
+            # Same pattern as VWAP: stop = ATR14 × multiplier.
+            'ORB_USE_ATR_STOPS':   True,
+            'ORB_STOP_ATR':        0.3,      # 0.3 × ATR14 ≈ 90-120 pts (BANKNIFTY)
+            'ORB_TARGET_ATR':      0.6,      # target = 2× stop = 180-240 pts
+            # Legacy params kept for backward compat / mode='legacy' sweep
+            'ORB_STOP_PCT':        0.005,
+            'ORB_TARGET_R':        2.0,
         },
     },
     'vwap_reversion': {
         'module':   'strategies.vwap_reversion',
         'function': 'run_vwap_reversion',
         'params': {
-            'VWAP_BAND_PCT':   0.002,   # 0.2% deviation (~80 pts for BANKNIFTY@40k)
-                                        # 0.5% was too wide — almost no signals generated
-            'VWAP_STOP_ATR':   0.5,     # 0.5x ATR14 as stop
-            'VWAP_TARGET_ATR': 1.0,     # 1.0x ATR14 as target (1:2 R/R)
+            'VWAP_BAND_PCT':   0.0025,  # 0.25% = ~100 pts @ BN 40k (sweep optimal)
+            'VWAP_STOP_ATR':   0.5,     # 0.5x ATR14 as stop (sweep optimal)
+            'VWAP_TARGET_ATR': 0.75,    # 0.75x ATR14 as target (sweep optimal)
         },
     },
 }
