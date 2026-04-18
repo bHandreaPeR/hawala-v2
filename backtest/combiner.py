@@ -175,15 +175,20 @@ def _apply_lots(row: dict, lots: int, margin_per_lot: float) -> None:
     """
     Mutate a trade row to use actual lots_used.
     Recalculates pnl_rs and capital_used based on allocated lots.
-    """
-    old_lots = row.get('lots_used', 1) or 1
-    brokerage = row.get('brokerage', 40) if 'brokerage' in row else 40
 
-    row['lots_used']   = lots
-    row['capital_used']= lots * margin_per_lot
+    lot_size (contracts/lot) is read from the row — set by _attach_contract_metadata
+    when use_futures=True (time-varying: 25 pre-Nov-2023, 15 post).
+    Falls back to 'lots_used' which run_*() strategies set = LOT_SIZE from config.
+    """
+    # contracts per lot — must distinguish from number-of-lots
+    lot_size  = row.get('lot_size') or row.get('lots_used', 1) or 1
+    brokerage = 40   # ₹ per round trip (Groww)
+
+    row['lots_used']    = lots
+    row['capital_used'] = lots * margin_per_lot
 
     if lots > 0 and 'pnl_pts' in row:
-        row['pnl_rs'] = round(row['pnl_pts'] * lots - brokerage, 2)
+        row['pnl_rs'] = round(row['pnl_pts'] * lots * lot_size - brokerage, 2)
         row['win']    = 1 if row['pnl_rs'] > 0 else 0
     else:
         row['pnl_rs'] = 0.0

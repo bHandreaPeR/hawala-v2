@@ -279,7 +279,9 @@ def vwap_parameter_sweep(data: pd.DataFrame,
     """
     Sweep VWAP band and R/R parameters. No global mutation.
     """
-    bands       = [0.003, 0.004, 0.005, 0.006, 0.008]
+    # Lower end added: 0.5% (=200 pts @ BN 40k) produced almost no signals.
+    # 0.1–0.3% (40–120 pts) is the realistic intraday VWAP deviation range.
+    bands       = [0.001, 0.0015, 0.002, 0.0025, 0.003, 0.004, 0.005]
     stop_atrs   = [0.4, 0.5, 0.6, 0.75]
     target_atrs = [0.75, 1.0, 1.25, 1.5]
 

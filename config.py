@@ -68,7 +68,8 @@ STRATEGIES = {
         'module':   'strategies.vwap_reversion',
         'function': 'run_vwap_reversion',
         'params': {
-            'VWAP_BAND_PCT':   0.005,   # 0.5% deviation before watching
+            'VWAP_BAND_PCT':   0.002,   # 0.2% deviation (~80 pts for BANKNIFTY@40k)
+                                        # 0.5% was too wide — almost no signals generated
             'VWAP_STOP_ATR':   0.5,     # 0.5x ATR14 as stop
             'VWAP_TARGET_ATR': 1.0,     # 1.0x ATR14 as target (1:2 R/R)
         },
