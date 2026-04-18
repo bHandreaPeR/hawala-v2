@@ -31,7 +31,7 @@ INSTRUMENTS = {
     'NIFTY': {
         'symbol':            'NSE-NIFTY',
         'underlying_symbol': 'NIFTY',
-        'lot_size':          25,               # current lot size
+        'lot_size':          25,               # current lot size (post 24-Nov-2023)
         # NIFTY lot size history: changed 50→25 on 24-Nov-2023 per SEBI revision
         'lot_size_history': [
             ('2020-01-01', '2023-11-23', 50),  # 50 contracts/lot before revision
@@ -39,10 +39,20 @@ INSTRUMENTS = {
         ],
         'brokerage':         40,
         'slippage':          5,
-        'min_gap':           30,               # ~0.1% of NIFTY at 30,000
+        'min_gap':           30,               # TODO: re-evaluate after gap_fill sweep
         'max_gap':           200,
         'margin_per_lot':    55_000,           # approx SPAN + exposure margin (₹)
         'strike_interval':   50,
+        # Per-instrument strategy param overrides — merged over global STRATEGIES params
+        # by backtest/engine.py run_backtest().
+        # BANKNIFTY defaults (STEP=75, STOP=80) are calibrated for ₹40k price level.
+        # NIFTY at ₹19k needs proportionally smaller absolute stops/steps.
+        # Values below are PLACEHOLDERS — update after running gap_fill_parameter_sweep
+        # and vwap_parameter_sweep on NIFTY data (see run_next_steps.run_nifty_calibration).
+        'strategy_params': {
+            'STEP_PTS': 40,    # placeholder: ~0.55 × BANKNIFTY STEP_PTS=75
+            'STOP_PTS': 45,    # placeholder: ~0.55 × BANKNIFTY STOP_PTS=80
+        },
     },
 }
 

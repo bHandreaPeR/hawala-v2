@@ -254,6 +254,79 @@ def run_orb_atr_sweep(data=None, groww=None):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# NIFTY calibration sweeps
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_nifty_calibration(nifty_data=None, groww=None):
+    """
+    Run gap_fill and VWAP parameter sweeps on NIFTY data to find
+    NIFTY-specific optimal params, then print recommended config updates.
+
+    NIFTY at ₹19k needs different absolute STEP_PTS/STOP_PTS/band than
+    BANKNIFTY at ₹40k. This replaces the placeholder values in config.py.
+
+    Usage:
+        # Option A: pass pre-fetched data (faster — no API calls)
+        run_nifty_calibration(nifty_data=nifty_data)
+
+        # Option B: let it fetch
+        run_nifty_calibration(groww=groww)
+    """
+    from strategies.gap_fill import gap_fill_parameter_sweep
+    from strategies.vwap_reversion import vwap_parameter_sweep
+    from config import INSTRUMENTS
+
+    cfg = INSTRUMENTS['NIFTY']
+
+    if nifty_data is None:
+        if groww is None:
+            raise ValueError("Pass either nifty_data= or groww=")
+        print("Fetching NIFTY futures 2022-2024...")
+        nifty_data = fetch_instrument('NIFTY', '2022-01-01', '2024-12-31',
+                                      groww=groww, use_futures=True)
+        if nifty_data.empty:
+            print("❌ NIFTY data fetch failed.")
+            return {}
+
+    print("\n" + "="*65)
+    print("  NIFTY CALIBRATION — Gap Fill Parameter Sweep")
+    print("="*65)
+    gf_sweep = gap_fill_parameter_sweep(nifty_data, cfg)
+
+    print("\n" + "="*65)
+    print("  NIFTY CALIBRATION — VWAP Parameter Sweep")
+    print("="*65)
+    vw_sweep = vwap_parameter_sweep(nifty_data, cfg)
+
+    # Print recommended config updates
+    print("\n" + "="*65)
+    print("  RECOMMENDED config.py updates for NIFTY")
+    print("="*65)
+
+    if not gf_sweep.empty:
+        best_gf = gf_sweep.iloc[0]
+        print(f"\n  Gap Fill (best: ₹{best_gf['total_pl']:,.0f} total, "
+              f"{best_gf['win_rate']:.1f}% WR):")
+        print(f"    'strategy_params': {{")
+        print(f"        'STEP_PTS': {best_gf['STEP_PTS']:.0f},")
+        print(f"        'STOP_PTS': {best_gf['STOP_PTS']:.0f},")
+        print(f"    }}")
+        if best_gf['total_pl'] < 0:
+            print(f"  ⚠  Best combo still negative — drop NIFTY gap fill entirely.")
+
+    if not vw_sweep.empty:
+        best_vw = vw_sweep.iloc[0]
+        print(f"\n  VWAP (best: ₹{best_vw['total_pl']:,.0f} total, "
+              f"{best_vw['win_rate']:.1f}% WR, {best_vw['trades']:.0f} trades):")
+        print(f"    Add to NIFTY 'strategy_params':")
+        print(f"        'VWAP_BAND_PCT':   {best_vw['band_pct']/100:.4f},")
+        print(f"        'VWAP_STOP_ATR':   {best_vw['stop_atr']:.2f},")
+        print(f"        'VWAP_TARGET_ATR': {best_vw['target_atr']:.2f},")
+
+    return {'gap_fill_sweep': gf_sweep, 'vwap_sweep': vw_sweep}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # NIFTY validation — parallel instrument backtest
 # ══════════════════════════════════════════════════════════════════════════════
 

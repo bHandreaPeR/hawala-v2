@@ -63,7 +63,14 @@ def run_backtest(strategy_name: str,
 
     instrument_config = INSTRUMENTS[instrument]
     strategy_cfg      = STRATEGIES[strategy_name]
-    strategy_params   = strategy_cfg['params']
+    # Merge global strategy params with per-instrument overrides.
+    # Instruments can define a 'strategy_params' dict to override specific
+    # params for their price/lot-size regime without touching global defaults.
+    # e.g. NIFTY needs different STEP_PTS/STOP_PTS than BANKNIFTY.
+    strategy_params   = {
+        **strategy_cfg['params'],
+        **instrument_config.get('strategy_params', {}),
+    }
 
     # ── Step 1: Fetch data ────────────────────────────────────────────────────
     mode = "FUTURES" if use_futures else "SPOT"
