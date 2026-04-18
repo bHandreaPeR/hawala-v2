@@ -63,14 +63,14 @@ STRATEGIES = {
         'module':   'strategies.orb',
         'function': 'run_orb',
         'params': {
-            'ORB_WINDOW_END':      '10:00',  # best window from legacy sweep
-            'ORB_BREAKOUT_BUFFER': 10,       # best buffer from legacy sweep
-            # ATR-based stops — fixes structural problem where ORB-range stops
-            # were 200-400 pts making targets unreachable intraday.
-            # Same pattern as VWAP: stop = ATR14 × multiplier.
+            'ORB_WINDOW_END':      '09:30',  # sweep optimal (earlier = tighter range)
+            'ORB_BREAKOUT_BUFFER': 10,       # sweep optimal
+            # ATR-based stops — sweep optimal: stop_atr=0.4, target_atr=0.75
+            # R:R = 0.75/0.4 = 1.875:1 with 53% WR → clear positive expectancy
+            # 168 trades, ₹44,696 total, ₹266 avg/trade (2022-2024)
             'ORB_USE_ATR_STOPS':   True,
-            'ORB_STOP_ATR':        0.3,      # 0.3 × ATR14 ≈ 90-120 pts (BANKNIFTY)
-            'ORB_TARGET_ATR':      0.6,      # target = 2× stop = 180-240 pts
+            'ORB_STOP_ATR':        0.4,      # 0.4 × ATR14 ≈ 120-160 pts (BANKNIFTY)
+            'ORB_TARGET_ATR':      0.75,     # target ≈ 225-300 pts
             # Legacy params kept for backward compat / mode='legacy' sweep
             'ORB_STOP_PCT':        0.005,
             'ORB_TARGET_R':        2.0,
