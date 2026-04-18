@@ -45,13 +45,15 @@ INSTRUMENTS = {
         'strike_interval':   50,
         # Per-instrument strategy param overrides — merged over global STRATEGIES params
         # by backtest/engine.py run_backtest().
-        # BANKNIFTY defaults (STEP=75, STOP=80) are calibrated for ₹40k price level.
-        # NIFTY at ₹19k needs proportionally smaller absolute stops/steps.
-        # Values below are PLACEHOLDERS — update after running gap_fill_parameter_sweep
-        # and vwap_parameter_sweep on NIFTY data (see run_next_steps.run_nifty_calibration).
+        # Gap fill sweep on NIFTY: best combo still ₹-3,194 (37.8% WR) → DO NOT run
+        # gap fill on NIFTY. ORB + VWAP only.
+        # VWAP sweep on NIFTY: band=0.25%, stop_atr=0.75, target_atr=1.50
+        # gives ₹8,092 / 46 trades / 50% WR over 2022-2024.
         'strategy_params': {
-            'STEP_PTS': 40,    # placeholder: ~0.55 × BANKNIFTY STEP_PTS=75
-            'STOP_PTS': 45,    # placeholder: ~0.55 × BANKNIFTY STOP_PTS=80
+            # VWAP — calibrated for NIFTY price level (~₹19k)
+            'VWAP_BAND_PCT':   0.0025,  # 0.25% = ~47 pts at NIFTY 19k (same % as BN)
+            'VWAP_STOP_ATR':   0.75,    # wider stop works better on NIFTY
+            'VWAP_TARGET_ATR': 1.50,    # 2:1 R:R on NIFTY VWAP
         },
     },
 }
