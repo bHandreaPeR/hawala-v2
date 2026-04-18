@@ -1,0 +1,25 @@
+# ── Secrets — NEVER commit these ──────────────────────────────
+.github_token
+*.token
+*.secret
+.env
+.env.*
+
+# ── Generated outputs ──────────────────────────────────────────
+market_report_*.pdf
+market_report_*.html
+market_signal_*.json
+data_*.json
+
+# ── Cached data files ──────────────────────────────────────────
+fii_data.csv
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# ── OS / Editor ────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp

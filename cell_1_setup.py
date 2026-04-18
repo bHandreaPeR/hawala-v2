@@ -5,7 +5,9 @@
 # Broker: Groww (free plan)  |  Exchange: NSE  |  Segment: CASH
 # ============================================================
 
-# !pip install growwapi scikit-learn yfinance nselib xlrd -q
+import subprocess
+subprocess.run(["pip", "install", "growwapi", "scikit-learn", "yfinance",
+                "nselib", "xlrd", "-q"], check=False)
 
 from growwapi import GrowwAPI
 import pandas as pd

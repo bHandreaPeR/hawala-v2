@@ -1,7 +1,8 @@
 # ============================================================
-# CELL 5 — Macro Filter Layer  (v2)
+# macro/filters.py — Macro Filter Layer  (v2)
 # ============================================================
-# Applies external market condition filters to gap_df trades.
+# Applies external market condition filters to any trade_log.
+# Reusable across all strategies — not gap-fill specific.
 #
 # Filters  : India VIX, S&P 500 overnight return, FII net activity
 # Regime   : Brent crude overnight move, USD/INR overnight move
@@ -80,10 +81,13 @@ def fetch_sp500_returns(start_date, end_date):
         sp_ret = {}
         dates  = list(sp.index)
         for i in range(1, len(dates)):
-            india_date      = dates[i].date()
-            sp_ret[india_date] = float(sp['ret'].iloc[i - 1])
+            india_date = dates[i].date()
+            val = float(sp['ret'].iloc[i - 1])
+            if not np.isnan(val):           # skip the first NaN row
+                sp_ret[india_date] = val
+        valid_vals = list(sp_ret.values())
         print(f"  ✅ S&P: {len(sp_ret)} days | "
-              f"Range {min(sp_ret.values()):.1f}%–{max(sp_ret.values()):.1f}%")
+              f"Range {min(valid_vals):.1f}%–{max(valid_vals):.1f}%")
         return sp_ret
     except Exception as e:
         print(f"  ❌ S&P fetch failed: {e}")
@@ -164,7 +168,7 @@ def fetch_usdinr(start_date, end_date):
 # REGIME CLASSIFIER
 # ════════════════════════════════════════════════════════════
 
-def classify_regime(gap_df,
+def classify_regime(trade_log,
                     brent_ret,
                     usdinr_ret,
                     brent_spike_thr=2.0,
@@ -194,7 +198,7 @@ def classify_regime(gap_df,
     Returns:
         pd.DataFrame: gap_df with columns [brent_ret_day, usdinr_ret_day, regime]
     """
-    df = gap_df.copy()
+    df = trade_log.copy()
     df['brent_ret_day']  = df['date'].map(lambda d: brent_ret.get(d, np.nan))
     df['usdinr_ret_day'] = df['date'].map(lambda d: usdinr_ret.get(d, np.nan))
 
@@ -239,7 +243,7 @@ def classify_regime(gap_df,
 # ATTRIBUTION ANALYSIS
 # ════════════════════════════════════════════════════════════
 
-def filter_attribution(gap_df,
+def filter_attribution(trade_log,
                        india_vix,
                        sp_ret,
                        fii_data=None,
@@ -262,7 +266,7 @@ def filter_attribution(gap_df,
     Returns:
         pd.DataFrame: gap_df with all filter columns attached
     """
-    df = gap_df.copy()
+    df = trade_log.copy()
 
     fpi_dict = {}
     if fii_data is not None and not fii_data.empty:
@@ -348,7 +352,7 @@ def filter_attribution(gap_df,
 # FILTER APPLICATION (with min_filters voting)
 # ════════════════════════════════════════════════════════════
 
-def apply_macro_filters(gap_df,
+def apply_macro_filters(trade_log,
                         india_vix,
                         sp_ret,
                         fii_data=None,
@@ -375,7 +379,7 @@ def apply_macro_filters(gap_df,
     Returns:
         pd.DataFrame: gap_df + filter columns + filter_count + trade_ok
     """
-    df = gap_df.copy()
+    df = trade_log.copy()
 
     fpi_dict = {}
     if fii_data is not None and not fii_data.empty:
@@ -402,6 +406,34 @@ def apply_macro_filters(gap_df,
     # Trade if fewer than min_filters have fired
     df['trade_ok'] = df['filter_count'] < min_filters
 
+    # ── Diagnostics ───────────────────────────────────────────────────────────
+    n          = len(df)
+    vix_flags  = df['filter_vix'].sum()
+    sp_flags   = df['filter_sp'].sum()
+    fpi_flags  = df['filter_fpi'].sum()
+    blocked    = (~df['trade_ok']).sum()
+
+    # How many trade dates had no matching data at all
+    vix_missing = df['vix_day'].isna().sum()
+    sp_missing  = df['sp_ret_day'].isna().sum()
+
+    print(f"\n  Filter breakdown ({n} trades, min_filters={min_filters}):")
+    print(f"    VIX  > {vix_threshold:.0f}     : {vix_flags:>4} flags  "
+          f"({vix_missing} dates missing data)")
+    print(f"    S&P  < {sp_threshold:.1f}%  : {sp_flags:>4} flags  "
+          f"({sp_missing} dates missing data)")
+    print(f"    FPI  < {fpi_threshold:,.0f}Cr: {fpi_flags:>4} flags")
+    print(f"    ─────────────────────────────────────")
+    print(f"    Overlap (≥{min_filters} filters)  : {blocked:>4} trades blocked")
+
+    if vix_flags > 0 and sp_flags == 0:
+        print(f"  ⚠  S&P filter never fired — check if sp_ret dates match trade dates")
+        if sp_missing == n:
+            print(f"  ❌ ALL S&P lookups returned NaN — date key mismatch in sp_ret dict")
+    if blocked == 0 and (vix_flags > 0 or sp_flags > 0):
+        print(f"  ℹ  Individual filters fired but never on the same day. "
+              f"Try min_filters=1 to test.")
+
     return df
 
 
@@ -409,7 +441,7 @@ def apply_macro_filters(gap_df,
 # BACKTEST WITH FULL REPORTING
 # ════════════════════════════════════════════════════════════
 
-def run_macro_backtest(gap_df, india_vix, sp_ret, fii_data=None,
+def run_macro_backtest(trade_log, india_vix, sp_ret, fii_data=None,
                        min_filters=2):
     """
     Apply filters and compare filtered vs unfiltered P&L, year by year.
@@ -464,7 +496,7 @@ def run_macro_backtest(gap_df, india_vix, sp_ret, fii_data=None,
 # THRESHOLD SWEEPS
 # ════════════════════════════════════════════════════════════
 
-def vix_sweep(gap_df, india_vix, thresholds=None):
+def vix_sweep(trade_log, india_vix, thresholds=None):
     """
     Sweep VIX threshold to find optimal cutoff.
     Shows trades kept, win rate, and total P&L at each level.
@@ -472,7 +504,7 @@ def vix_sweep(gap_df, india_vix, thresholds=None):
     if thresholds is None:
         thresholds = [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
 
-    df = gap_df.copy()
+    df = trade_log.copy()
     df['vix_day'] = df['date'].map(lambda d: india_vix.get(d, np.nan))
 
     print(f"\nVIX Threshold Sweep:")
@@ -487,14 +519,14 @@ def vix_sweep(gap_df, india_vix, thresholds=None):
         print(f"  VIX ≤ {thr:4.1f}    {len(sub):6d}   {wr:7.1f}%   ₹{pl:>10,.0f}")
 
 
-def sp_sweep(gap_df, sp_ret, thresholds=None):
+def sp_sweep(trade_log, sp_ret, thresholds=None):
     """
     Sweep S&P threshold to find optimal cutoff.
     """
     if thresholds is None:
         thresholds = [-3.0, -2.5, -2.0, -1.75, -1.5, -1.25, -1.0, -0.75]
 
-    df = gap_df.copy()
+    df = trade_log.copy()
     df['sp_ret_day'] = df['date'].map(lambda d: sp_ret.get(d, np.nan))
 
     print(f"\nS&P Threshold Sweep:")
@@ -509,14 +541,14 @@ def sp_sweep(gap_df, sp_ret, thresholds=None):
         print(f"  S&P ≥ {thr:5.2f}%    {len(sub):6d}   {wr:7.1f}%   ₹{pl:>10,.0f}")
 
 
-def fpi_sweep(gap_df, fii_data, thresholds=None):
+def fpi_sweep(trade_log, fii_data, thresholds=None):
     """
     Sweep FPI threshold to find optimal cutoff.
     """
     if thresholds is None:
         thresholds = [-1000, -1500, -2000, -2500, -3000, -3500, -4000, -5000]
 
-    df = gap_df.copy()
+    df = trade_log.copy()
     if fii_data is not None and not fii_data.empty:
         fpi_dict = dict(zip(
             pd.to_datetime(fii_data['date']).dt.date,
@@ -539,14 +571,14 @@ def fpi_sweep(gap_df, fii_data, thresholds=None):
         print(f"  FPI ≥ {thr:>6,.0f}Cr  {len(sub):6d}   {wr:7.1f}%   ₹{pl:>10,.0f}")
 
 
-def full_filter_grid(gap_df, india_vix, sp_ret, fii_data=None):
+def full_filter_grid(trade_log, india_vix, sp_ret, fii_data=None):
     """
     Grid search: test multiple threshold + voting logic combinations.
     Finds the combination that maximises filtered P&L.
 
     Prints top 10 combinations ranked by filtered P&L.
     """
-    df = gap_df.copy()
+    df = trade_log.copy()
 
     fpi_dict = {}
     if fii_data is not None and not fii_data.empty:
@@ -618,46 +650,46 @@ def full_filter_grid(gap_df, india_vix, sp_ret, fii_data=None):
 
 
 # ════════════════════════════════════════════════════════════
-# MAIN EXECUTION
+# MAIN EXECUTION — only runs when called directly, not on import
 # ════════════════════════════════════════════════════════════
+if __name__ == '__main__':
+    print("Setting up macro filters (v2)...\n")
 
-print("Setting up macro filters (v2)...\n")
+    # Fetch all external data
+    india_vix  = fetch_india_vix("2022-01-01", "2025-12-31")
+    sp_ret     = fetch_sp500_returns("2021-12-01", "2025-12-31")
+    brent_ret  = fetch_brent_crude("2021-12-01", "2025-12-31")
+    usdinr_ret = fetch_usdinr("2021-12-01", "2025-12-31")
 
-# Fetch all external data
-india_vix  = fetch_india_vix("2022-01-01", "2025-12-31")
-sp_ret     = fetch_sp500_returns("2021-12-01", "2025-12-31")
-brent_ret  = fetch_brent_crude("2021-12-01", "2025-12-31")
-usdinr_ret = fetch_usdinr("2021-12-01", "2025-12-31")
+    print("\n── Step 1: Attribution — is each filter actually helping? ──")
+    attr_df = filter_attribution(gap_df, india_vix, sp_ret,
+                                 fii_data if 'fii_data' in dir() else None)
 
-print("\n── Step 1: Attribution — is each filter actually helping? ──")
-attr_df = filter_attribution(gap_df, india_vix, sp_ret,
-                             fii_data if 'fii_data' in dir() else None)
+    print("\n── Step 2: Regime classification (Brent + USD/INR) ──")
+    regime_df = classify_regime(gap_df, brent_ret, usdinr_ret)
 
-print("\n── Step 2: Regime classification (Brent + USD/INR) ──")
-regime_df = classify_regime(gap_df, brent_ret, usdinr_ret)
+    print("\n── Step 3: Individual threshold sweeps ──")
+    vix_sweep(gap_df, india_vix)
+    sp_sweep(gap_df, sp_ret)
+    if 'fii_data' in dir():
+        fpi_sweep(gap_df, fii_data)
 
-print("\n── Step 3: Individual threshold sweeps ──")
-vix_sweep(gap_df, india_vix)
-sp_sweep(gap_df, sp_ret)
-if 'fii_data' in dir():
-    fpi_sweep(gap_df, fii_data)
+    print("\n── Step 4: Grid search — best filter combo ──")
+    if 'fii_data' in dir():
+        grid_results = full_filter_grid(gap_df, india_vix, sp_ret, fii_data)
+    else:
+        grid_results = full_filter_grid(gap_df, india_vix, sp_ret)
 
-print("\n── Step 4: Grid search — best filter combo ──")
-if 'fii_data' in dir():
-    grid_results = full_filter_grid(gap_df, india_vix, sp_ret, fii_data)
-else:
-    grid_results = full_filter_grid(gap_df, india_vix, sp_ret)
+    print("\n── Step 5: Apply best filters (2-of-3 voting, original thresholds) ──")
+    macro_df = run_macro_backtest(gap_df, india_vix, sp_ret,
+                                  fii_data if 'fii_data' in dir() else None,
+                                  min_filters=2)
 
-print("\n── Step 5: Apply best filters (2-of-3 voting, original thresholds) ──")
-macro_df = run_macro_backtest(gap_df, india_vix, sp_ret,
-                              fii_data if 'fii_data' in dir() else None,
-                              min_filters=2)
+    # Attach regime tags to macro_df
+    macro_df['brent_ret_day']  = macro_df['date'].map(lambda d: brent_ret.get(d, np.nan))
+    macro_df['usdinr_ret_day'] = macro_df['date'].map(lambda d: usdinr_ret.get(d, np.nan))
 
-# Attach regime tags to macro_df
-macro_df['brent_ret_day']  = macro_df['date'].map(lambda d: brent_ret.get(d, np.nan))
-macro_df['usdinr_ret_day'] = macro_df['date'].map(lambda d: usdinr_ret.get(d, np.nan))
-
-print("\n✅ Cell 5 complete.")
-print("   Available: india_vix, sp_ret, brent_ret, usdinr_ret")
-print("   Available: attr_df, regime_df, macro_df, grid_results")
-print("   macro_df has trade_ok + regime columns — feed into Cell 7 (ORB)")
+    print("\n✅ Cell 5 complete.")
+    print("   Available: india_vix, sp_ret, brent_ret, usdinr_ret")
+    print("   Available: attr_df, regime_df, macro_df, grid_results")
+    print("   macro_df has trade_ok + regime columns — feed into Cell 7 (ORB)")

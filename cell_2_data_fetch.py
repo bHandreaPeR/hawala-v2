@@ -78,5 +78,5 @@ def fetch_banknifty(start_date, end_date):
     return raw
 
 
-# ── Fetch 2022–2024 training + validation data ────────────────────────────
-data = fetch_banknifty("2022-01-01", "2024-12-31")
+# ── Fetch 2022–2025 (training 2022–2024 + out-of-sample 2025) ────────────
+data = fetch_banknifty("2022-01-01", "2025-12-31")
