@@ -65,6 +65,7 @@ def run_options_orb(data: pd.DataFrame,
     _target_mult   = p.get('target_mult',     sp.get('OPTIONS_TARGET_MULT', 2.0))
     _stop_mult     = p.get('stop_mult',       sp.get('OPTIONS_STOP_MULT',   0.50))
     _squareoff     = dtime(*[int(x) for x in sp.get('OPTIONS_SQUAREOFF', '12:00').split(':')])
+    _max_dte       = p.get('max_dte',         sp.get('OPTIONS_MAX_DTE',     None))  # None = no cap
 
     # ── Regime lookup ─────────────────────────────────────────────────────────
     regime_lookup = {}
@@ -164,6 +165,13 @@ def run_options_orb(data: pd.DataFrame,
                 )
                 if expiry_date is None:
                     expiry_date = get_nearest_expiry(groww, UNDERLYING, tdate, min_days=1)
+
+                # DTE filter: skip if expiry is too far out (far-DTE = expensive premium,
+                # low delta — 2× target becomes unreachable on BANKNIFTY monthly options)
+                if expiry_date is not None and _max_dte is not None:
+                    dte = (pd.Timestamp(expiry_date).date() - tdate).days
+                    if dte > _max_dte:
+                        continue  # too far from expiry — skip, don't trade options today
 
                 if expiry_date is not None:
                     tdate_str = str(tdate)
@@ -302,6 +310,7 @@ def run_options_orb(data: pd.DataFrame,
             'atm_strike':     atm_strike,
             'opt_type':       opt_type,
             'expiry':         str(expiry_date) if expiry_date else '',
+            'dte':            (pd.Timestamp(expiry_date).date() - tdate).days if expiry_date else None,
             'premium_entry':  round(entry_premium, 2),
             'premium_exit':   round(exit_premium_final, 2),
             'margin_per_lot':     margin_per_lot_opt,

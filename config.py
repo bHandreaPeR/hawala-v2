@@ -15,11 +15,12 @@ INSTRUMENTS = {
     'BANKNIFTY': {
         'symbol':            'NSE-BANKNIFTY',  # Groww spot symbol (SEGMENT_CASH)
         'underlying_symbol': 'BANKNIFTY',      # for get_expiries() / get_contracts()
-        'lot_size':          15,               # current lot size (post 20-Nov-2023)
+        'lot_size':          30,               # current lot size (post 20-Nov-2024)
         # Historical lot size changes — used for accurate P&L across backtest periods
         'lot_size_history': [
-            ('2020-01-01', '2023-11-19', 25),  # 25 contracts/lot before revision
-            ('2023-11-20', '2099-12-31', 15),  # 15 contracts/lot after SEBI revision
+            ('2020-01-01', '2023-11-19', 25),  # 25 contracts/lot
+            ('2023-11-20', '2024-11-19', 15),  # 15 contracts/lot after Nov-2023 SEBI revision
+            ('2024-11-20', '2099-12-31', 30),  # 30 contracts/lot after Nov-2024 SEBI revision (min ₹15L contract value)
         ],
         'brokerage':         40,               # ₹ per round trip (Groww)
         'slippage':          10,               # pts assumed on entry/exit
@@ -112,6 +113,9 @@ STRATEGIES = {
             'OPTIONS_TARGET_MULT': 2.0,    # 2× entry premium → EV positive at 48% WR
             'OPTIONS_STOP_MULT':   0.50,   # stop at 50% of entry premium
             'OPTIONS_SQUAREOFF':   '12:00',
+            # DTE cap: None = no restriction, trade any expiry.
+            # BANKNIFTY monthly-only from Dec-2024 (SEBI removed weekly contracts).
+            'OPTIONS_MAX_DTE':     None,  # no DTE cap — trade any expiry
         },
     },
     'vwap_reversion': {
