@@ -50,13 +50,22 @@ def run_orb(data: pd.DataFrame,
     _stop_pct      = params.get('stop_pct',      strategy_params.get('ORB_STOP_PCT',        0.005))   if params else strategy_params.get('ORB_STOP_PCT',        0.005)
     _target_r      = params.get('target_r',      strategy_params.get('ORB_TARGET_R',        2.0))     if params else strategy_params.get('ORB_TARGET_R',        2.0)
     _buffer        = params.get('buffer',        strategy_params.get('ORB_BREAKOUT_BUFFER', 5))       if params else strategy_params.get('ORB_BREAKOUT_BUFFER', 5)
+    # IC-validated filters: dow_allow limits ORB to best signal days (Tue/Wed);
+    # max_gap_futures routes large-gap days to options_orb instead;
+    # orb_range_atr filters out wide, indecisive ORB ranges (IC=0.22).
+    _dow_allow      = params.get('dow_allow',      strategy_params.get('ORB_DOW_ALLOW',      None))    if params else strategy_params.get('ORB_DOW_ALLOW',      None)
+    _max_gap_fut    = params.get('max_gap_futures', strategy_params.get('ORB_MAX_GAP_FUTURES', MAX_GAP)) if params else strategy_params.get('ORB_MAX_GAP_FUTURES', MAX_GAP)
+    _orb_range_atr  = params.get('orb_range_atr',  strategy_params.get('ORB_RANGE_ATR_MAX',  None))   if params else strategy_params.get('ORB_RANGE_ATR_MAX',  None)
     # ATR-based stop/target params — when use_atr_stops=True the ORB-range stop is
     # replaced with a volatility-normalised stop (same pattern as VWAP reversion).
     # Fixes the structural problem where ORB-range stops = 200-400 pts on gap days,
     # making targets unreachable intraday and producing negative P&L despite 51% WR.
-    _use_atr_stops = params.get('use_atr_stops', strategy_params.get('ORB_USE_ATR_STOPS', True))  if params else strategy_params.get('ORB_USE_ATR_STOPS', True)
-    _stop_atr      = params.get('stop_atr',      strategy_params.get('ORB_STOP_ATR',      0.3))   if params else strategy_params.get('ORB_STOP_ATR',      0.3)
-    _target_atr    = params.get('target_atr',    strategy_params.get('ORB_TARGET_ATR',    0.6))   if params else strategy_params.get('ORB_TARGET_ATR',    0.6)
+    _use_atr_stops  = params.get('use_atr_stops',  strategy_params.get('ORB_USE_ATR_STOPS',  True)) if params else strategy_params.get('ORB_USE_ATR_STOPS',  True)
+    _stop_atr       = params.get('stop_atr',       strategy_params.get('ORB_STOP_ATR',       0.40)) if params else strategy_params.get('ORB_STOP_ATR',       0.40)
+    _target_atr     = params.get('target_atr',     strategy_params.get('ORB_TARGET_ATR',     0.45)) if params else strategy_params.get('ORB_TARGET_ATR',     0.45)
+    # Breakeven trailing stop: once profit >= breakeven_atr × ATR14, move SL to entry.
+    # Set to 0 to disable. Default 0.20 = move to BE after 120 pts profit on BANKNIFTY.
+    _breakeven_atr  = params.get('breakeven_atr',  strategy_params.get('ORB_BREAKEVEN_ATR',  0.20)) if params else strategy_params.get('ORB_BREAKEVEN_ATR',  0.20)
 
     # ── Regime lookup ─────────────────────────────────────────────────────────
     regime_lookup = {}
@@ -90,6 +99,14 @@ def run_orb(data: pd.DataFrame,
         if abs(gap_pts) < MIN_GAP or abs(gap_pts) > MAX_GAP:
             continue
 
+        # ── IC-validated filters ──────────────────────────────────────────────
+        # Day-of-week filter: Thu (expiry pinning) and Mon (worst WR) can be excluded
+        if _dow_allow is not None and tdate.weekday() not in _dow_allow:
+            continue
+        # Max gap for futures routing: large gaps handled by options_orb
+        if abs(gap_pts) > _max_gap_fut:
+            continue
+
         # ── Regime filter ─────────────────────────────────────────────────────
         regime = regime_lookup.get(tdate, 'neutral')
         if allowed_regimes is not None and regime not in allowed_regimes:
@@ -105,6 +122,18 @@ def run_orb(data: pd.DataFrame,
         orb_high = float(orb_candles['High'].max())
         orb_low  = float(orb_candles['Low'].min())
         orb_size = orb_high - orb_low
+
+        # ── ORB range tightness filter (IC=0.22 validated) ───────────────────
+        # Tight range relative to ATR = cleaner breakout signal
+        if _orb_range_atr is not None:
+            atr_for_filter = np.mean([
+                float(data[data.index.date == dates[i - k]]['High'].max()) -
+                float(data[data.index.date == dates[i - k]]['Low'].min())
+                for k in range(1, 15)
+                if not data[data.index.date == dates[i - k]].empty
+            ] or [300])
+            if orb_size > atr_for_filter * _orb_range_atr:
+                continue
 
         # ── Check if gap filled during ORB window ─────────────────────────────
         # Requires a candle to CLOSE through prev_close (not just touch it)
@@ -178,12 +207,14 @@ def run_orb(data: pd.DataFrame,
         current_tp = entry + target_pts if direction == 1 else entry - target_pts
 
         # ── Simulate trade ────────────────────────────────────────────────────
-        entry_idx  = post_orb.index.get_loc(fidx)
-        post_entry = post_orb.iloc[entry_idx + 1:]
+        entry_idx     = post_orb.index.get_loc(fidx)
+        post_entry    = post_orb.iloc[entry_idx + 1:]
 
-        pnl_pts    = None
-        exit_reason= None
-        exit_ts    = None
+        pnl_pts       = None
+        exit_reason   = None
+        exit_ts       = None
+        be_triggered  = False                       # breakeven trail armed?
+        be_trigger_pts = atr14 * _breakeven_atr    # pts of profit to trigger BE
 
         for eidx, erow in post_entry.iterrows():
             if erow.name.time() >= dtime(15, 10):
@@ -196,10 +227,18 @@ def run_orb(data: pd.DataFrame,
             e_low  = float(erow['Low'])
             e_high = float(erow['High'])
 
+            # Breakeven trailing stop: once trade moves _breakeven_atr × ATR14
+            # in our favour, slide stop up/down to entry (zero-loss protection).
+            if not be_triggered and _breakeven_atr > 0:
+                favourable = (e_high - entry) if direction == 1 else (entry - e_low)
+                if favourable >= be_trigger_pts:
+                    current_sl   = entry      # lock in breakeven
+                    be_triggered = True
+
             if direction == 1:
                 if e_low <= current_sl:
                     pnl_pts     = current_sl - entry
-                    exit_reason = 'STOP LOSS'
+                    exit_reason = 'BREAKEVEN' if be_triggered and current_sl == entry else 'STOP LOSS'
                     exit_ts     = eidx
                     break
                 if e_high >= current_tp:
@@ -210,7 +249,7 @@ def run_orb(data: pd.DataFrame,
             else:
                 if e_high >= current_sl:
                     pnl_pts     = entry - current_sl
-                    exit_reason = 'STOP LOSS'
+                    exit_reason = 'BREAKEVEN' if be_triggered and current_sl == entry else 'STOP LOSS'
                     exit_ts     = eidx
                     break
                 if e_low <= current_tp:
@@ -253,9 +292,10 @@ def run_orb(data: pd.DataFrame,
             'orb_size':    round(orb_size, 2),
             'stop_pts':    round(stop_pts, 2),
             'target_pts':  round(target_pts, 2),
-            'atr14':       round(atr14, 2),
-            'regime':      regime,
-            'macro_ok':    True,
+            'atr14':         round(atr14, 2),
+            'be_triggered':  int(be_triggered),
+            'regime':        regime,
+            'macro_ok':      True,
         })
 
     return pd.DataFrame(records)

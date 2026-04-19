@@ -38,7 +38,7 @@ def build_options_symbol(exchange: str, ticker: str, expiry_date: date,
     Format: {Exchange}-{Ticker}-{D}{Mon}{YY}-{Strike}-{CE/PE}
     Example: 'NSE-BANKNIFTY-2May22-36000-CE'
     """
-    day_str = str(expiry_date.day)
+    day_str = f"{expiry_date.day:02d}"
     mon_str = expiry_date.strftime('%b')
     yr_str  = expiry_date.strftime('%y')
     return f"{exchange}-{ticker}-{day_str}{mon_str}{yr_str}-{strike}-{option_type}"
