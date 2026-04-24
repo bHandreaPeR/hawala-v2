@@ -81,6 +81,25 @@ UNDERLYING      = inst_cfg['underlying_symbol']
 
 _DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
+TRADE_LOG_DIR = pathlib.Path('trade_logs')
+TRADE_LOG_DIR.mkdir(exist_ok=True)
+
+import pathlib, csv as _csv
+
+def _log_trade(row: dict) -> None:
+    """Append a completed trade row to the live trade log CSV."""
+    log_path = TRADE_LOG_DIR / 'live_trades.csv'
+    fieldnames = ['date', 'weekday', 'strategy', 'ticker', 'direction',
+                  'entry', 'entry_time', 'exit', 'exit_time', 'exit_reason',
+                  'pnl_pts', 'pnl_rs', 'lots', 'lot_size', 'gap_pts', 'atr14']
+    write_header = not log_path.exists()
+    with open(log_path, 'a', newline='') as f:
+        w = _csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
+        if write_header:
+            w.writeheader()
+        w.writerow(row)
+    print(f"  📝 Trade logged → {log_path.name}")
+
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -423,7 +442,7 @@ def send_vwap_entry(entry_info: dict, gap_info: dict) -> dict:
 # ── Exit watchers ─────────────────────────────────────────────────────────────
 
 def _fmt_exit(strategy: str, reason: str, exit_px: float, entry_px: float,
-              direction: int, ts) -> None:
+              direction: int, ts, entry_info: dict = None, gap_info: dict = None) -> None:
     pnl_pts = (exit_px - entry_px) * direction
     pnl_rs  = round(pnl_pts * LOT_SIZE - 40, 2)
     icon    = '🎯' if reason == 'TARGET HIT' else ('🛑' if reason == 'STOP LOSS' else '⏹')
@@ -438,10 +457,30 @@ def _fmt_exit(strategy: str, reason: str, exit_px: float, entry_px: float,
     )
     for chat_id in TG_CHAT_IDS:
         tg(TG_TOKEN, chat_id, msg)
+    # Persist trade to CSV
+    today = date.today()
+    _log_trade({
+        'date':        today.isoformat(),
+        'weekday':     _DAY_NAMES[today.weekday()],
+        'strategy':    strategy,
+        'ticker':      f'BANKNIFTY FUT',
+        'direction':   'LONG' if direction == 1 else 'SHORT',
+        'entry':       round(entry_px, 2),
+        'entry_time':  entry_info['entry_ts'].strftime('%H:%M') if entry_info and 'entry_ts' in entry_info else '',
+        'exit':        round(exit_px, 2),
+        'exit_time':   t,
+        'exit_reason': reason,
+        'pnl_pts':     round(pnl_pts, 2),
+        'pnl_rs':      pnl_rs,
+        'lots':        1,
+        'lot_size':    LOT_SIZE,
+        'gap_pts':     gap_info['gap_pts'] if gap_info else '',
+        'atr14':       round(gap_info['atr14'], 0) if gap_info else '',
+    })
 
 
 def _fmt_opt_exit(reason: str, exit_prem: float, entry_prem: float,
-                  opt_info: dict, ts) -> None:
+                  opt_info: dict, ts, entry_info: dict = None, gap_info: dict = None) -> None:
     pnl_pts = exit_prem - entry_prem
     pnl_rs  = round(pnl_pts * LOT_SIZE - 40, 2)
     icon    = '🎯' if reason == 'TARGET HIT' else ('🛑' if reason == 'STOP LOSS' else '⏹')
@@ -457,6 +496,25 @@ def _fmt_opt_exit(reason: str, exit_prem: float, entry_prem: float,
     )
     for chat_id in TG_CHAT_IDS:
         tg(TG_TOKEN, chat_id, msg)
+    today = date.today()
+    _log_trade({
+        'date':        today.isoformat(),
+        'weekday':     _DAY_NAMES[today.weekday()],
+        'strategy':    'OPT_ORB',
+        'ticker':      f"BANKNIFTY {opt_info['opt_type']} {opt_info['strike']} {opt_info['expiry']}",
+        'direction':   opt_info['opt_type'],
+        'entry':       round(entry_prem, 2),
+        'entry_time':  entry_info['entry_ts'].strftime('%H:%M') if entry_info and 'entry_ts' in entry_info else '',
+        'exit':        round(exit_prem, 2),
+        'exit_time':   t,
+        'exit_reason': reason,
+        'pnl_pts':     round(pnl_pts, 2),
+        'pnl_rs':      pnl_rs,
+        'lots':        1,
+        'lot_size':    LOT_SIZE,
+        'gap_pts':     gap_info['gap_pts'] if gap_info else '',
+        'atr14':       round(gap_info['atr14'], 0) if gap_info else '',
+    })
 
 
 def watch_exit_futures(today_str: str, strategy: str,
@@ -594,6 +652,25 @@ def run_day() -> None:
 
     strategy = gap_info['strategy']
     if strategy in ('SKIP_DOW', 'SKIP_GAP'):
+        # Log the no-trade day so the weekly report is complete
+        _log_trade({
+            'date':        today.isoformat(),
+            'weekday':     _DAY_NAMES[dow],
+            'strategy':    'NO_TRADE',
+            'ticker':      'BANKNIFTY',
+            'direction':   '—',
+            'entry':       '',
+            'entry_time':  '',
+            'exit':        '',
+            'exit_time':   '',
+            'exit_reason': strategy,
+            'pnl_pts':     0,
+            'pnl_rs':      0,
+            'lots':        0,
+            'lot_size':    LOT_SIZE,
+            'gap_pts':     gap_info.get('gap_pts', ''),
+            'atr14':       round(gap_info.get('atr14', 0), 0),
+        })
         return
 
     # ── ORB / OPT_ORB path ───────────────────────────────────────────────────
