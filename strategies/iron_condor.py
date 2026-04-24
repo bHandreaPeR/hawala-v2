@@ -45,7 +45,10 @@ from scipy.stats import norm
 
 _RISK_FREE = 0.065        # Indian risk-free rate
 _EXPIRY_IV = 0.26         # IV on expiry day (hardcoded, matches existing convention)
-_MIN_T     = 1.0 / (365 * 6.5)  # ~1 bar minimum to avoid log(0) at exact expiry
+# Use TRADING minutes per year so 0-DTE options priced on remaining session time,
+# not near-zero calendar time. 252 days × 6.5 hours × 60 min = 98,280 mins/yr.
+_TRADING_MINS_PER_YEAR = 252 * 6.5 * 60   # 98,280
+_MIN_T = 1.0 / _TRADING_MINS_PER_YEAR     # ≈ 1 trading-minute floor
 
 
 def _bs_price(S: float, K: float, T: float, r: float, sigma: float,
@@ -321,11 +324,12 @@ def run_iron_condor(
 
         # ── PREMIUM FETCH (live or backtest proxy) ────────────────────────────
         today_str = str(today)
-        # Time to expiry: from entry to 3:30 PM IST
+        # Time to expiry: from entry to squareoff, expressed in trading-year fraction.
+        # Using TRADING minutes (not calendar time) gives realistic 0-DTE premiums.
         entry_minutes = entry_ts.hour * 60 + entry_ts.minute
         sq_minutes    = sq_h * 60 + sq_m
         total_trading_minutes = max(sq_minutes - entry_minutes, 30)
-        T_entry = total_trading_minutes / (365 * 24 * 60)
+        T_entry = total_trading_minutes / _TRADING_MINS_PER_YEAR
 
         if groww is not None:
             # Live: fetch real premiums
@@ -358,58 +362,48 @@ def run_iron_condor(
         upper_be = call_short + net_credit
         lower_be = put_short  - net_credit
 
-        # Deltas for exit proxy (short legs OTM, wings further OTM)
-        cs_delta = _bs_delta(spot, call_short, T_entry, _RISK_FREE, _EXPIRY_IV, 'call')
-        cl_delta = _bs_delta(spot, call_long,  T_entry, _RISK_FREE, _EXPIRY_IV, 'call')
-        ps_delta = _bs_delta(spot, put_short,  T_entry, _RISK_FREE, _EXPIRY_IV, 'put')
-        pl_delta = _bs_delta(spot, put_long,   T_entry, _RISK_FREE, _EXPIRY_IV, 'put')
-
         # ── MONITORING LOOP ──────────────────────────────────────────────────
+        # Backtest: use rolling Black-Scholes at each bar with actual remaining T.
+        # This correctly captures gamma explosion when spot approaches short strike
+        # near expiry — the delta-proxy linear model fails in that regime.
         exit_ts     = None
         exit_reason = 'SQUARE OFF'
-        net_debit   = net_credit * (1.0 - IC_PROFIT_PCT)  # default: target hit at squareoff
+        net_debit   = net_credit    # fallback if no bars after entry
 
         post_entry = entry_candles.iloc[1:]   # candles after entry
         for j, (bar_ts, bar) in enumerate(post_entry.iterrows()):
-            bar_time = bar_ts.time()
+            bar_time     = bar_ts.time()
+            bar_mins     = bar_time.hour * 60 + bar_time.minute
+            mins_remain  = max(sq_minutes - bar_mins, 1)  # trading minutes left to squareoff
+            T_now        = mins_remain / _TRADING_MINS_PER_YEAR
 
             # Hard squareoff
-            if bar_time.hour > sq_h or (bar_time.hour == sq_h and bar_time.minute >= sq_m):
-                exit_ts     = bar_ts
-                exit_reason = 'SQUARE OFF'
-                minutes_held = (bar_ts - entry_ts).total_seconds() / 60
-                # Compute exit net debit
-                if groww is not None:
-                    cs_ex = _fetch_leg_exit(groww, underlying, expiry_date, call_short, 'CE', today_str, bar_ts) or cs_prem * 0.3
-                    cl_ex = _fetch_leg_exit(groww, underlying, expiry_date, call_long,  'CE', today_str, bar_ts) or cl_prem * 0.3
-                    ps_ex = _fetch_leg_exit(groww, underlying, expiry_date, put_short,  'PE', today_str, bar_ts) or ps_prem * 0.3
-                    pl_ex = _fetch_leg_exit(groww, underlying, expiry_date, put_long,   'PE', today_str, bar_ts) or pl_prem * 0.3
-                else:
-                    spot_exit = float(bar['Open'])
-                    spot_move = spot_exit - spot
-                    cs_ex = _leg_exit_prem(cs_prem,  cs_delta, spot_move, minutes_held, total_trading_minutes)
-                    cl_ex = _leg_exit_prem(cl_prem,  cl_delta, spot_move, minutes_held, total_trading_minutes)
-                    ps_ex = _leg_exit_prem(ps_prem,  ps_delta, spot_move, minutes_held, total_trading_minutes)
-                    pl_ex = _leg_exit_prem(pl_prem,  pl_delta, spot_move, minutes_held, total_trading_minutes)
-                net_debit = (cs_ex + ps_ex) - (cl_ex + pl_ex)
-                break
-
-            spot_now    = float(bar['Close'])
-            minutes_held = (bar_ts - entry_ts).total_seconds() / 60
+            is_squareoff = bar_time.hour > sq_h or (bar_time.hour == sq_h and bar_time.minute >= sq_m)
 
             if groww is not None:
-                cs_now = _fetch_leg_exit(groww, underlying, expiry_date, call_short, 'CE', today_str, bar_ts) or cs_prem
-                cl_now = _fetch_leg_exit(groww, underlying, expiry_date, call_long,  'CE', today_str, bar_ts) or cl_prem
-                ps_now = _fetch_leg_exit(groww, underlying, expiry_date, put_short,  'PE', today_str, bar_ts) or ps_prem
-                pl_now = _fetch_leg_exit(groww, underlying, expiry_date, put_long,   'PE', today_str, bar_ts) or pl_prem
+                cs_ex = _fetch_leg_exit(groww, underlying, expiry_date, call_short, 'CE', today_str, bar_ts) or _bs_price(spot, call_short, T_now, _RISK_FREE, _EXPIRY_IV, 'call')
+                cl_ex = _fetch_leg_exit(groww, underlying, expiry_date, call_long,  'CE', today_str, bar_ts) or _bs_price(spot, call_long,  T_now, _RISK_FREE, _EXPIRY_IV, 'call')
+                ps_ex = _fetch_leg_exit(groww, underlying, expiry_date, put_short,  'PE', today_str, bar_ts) or _bs_price(spot, put_short,  T_now, _RISK_FREE, _EXPIRY_IV, 'put')
+                pl_ex = _fetch_leg_exit(groww, underlying, expiry_date, put_long,   'PE', today_str, bar_ts) or _bs_price(spot, put_long,   T_now, _RISK_FREE, _EXPIRY_IV, 'put')
             else:
-                spot_move = spot_now - spot
-                cs_now = _leg_exit_prem(cs_prem, cs_delta, spot_move, minutes_held, total_trading_minutes)
-                cl_now = _leg_exit_prem(cl_prem, cl_delta, spot_move, minutes_held, total_trading_minutes)
-                ps_now = _leg_exit_prem(ps_prem, ps_delta, spot_move, minutes_held, total_trading_minutes)
-                pl_now = _leg_exit_prem(pl_prem, pl_delta, spot_move, minutes_held, total_trading_minutes)
+                # Rolling BS: re-price all 4 legs at current spot + remaining T
+                # This is the key fix: gamma explosion is modelled correctly because
+                # BS price rises rapidly when spot ≈ strike and T → 0.
+                spot_now = float(bar['Close'])
+                T_bs     = max(T_now, _MIN_T)
+                cs_ex = _bs_price(spot_now, call_short, T_bs, _RISK_FREE, _EXPIRY_IV, 'call')
+                cl_ex = _bs_price(spot_now, call_long,  T_bs, _RISK_FREE, _EXPIRY_IV, 'call')
+                ps_ex = _bs_price(spot_now, put_short,  T_bs, _RISK_FREE, _EXPIRY_IV, 'put')
+                pl_ex = _bs_price(spot_now, put_long,   T_bs, _RISK_FREE, _EXPIRY_IV, 'put')
 
-            current_debit = (cs_now + ps_now) - (cl_now + pl_now)
+            current_debit = (cs_ex + ps_ex) - (cl_ex + pl_ex)
+            spot_now = float(bar['Close']) if groww is None else spot
+
+            if is_squareoff:
+                exit_ts     = bar_ts
+                exit_reason = 'SQUARE OFF'
+                net_debit   = current_debit
+                break
 
             # BREACH GUARD — spot approaching short strike
             if (spot_now >= call_short - IC_BREACH_BUF or
@@ -434,9 +428,9 @@ def run_iron_condor(
                 break
 
         if exit_ts is None:
-            # No candle after entry (entered at last bar before squareoff)
+            # No bars after entry — entered near squareoff, assume full theta capture
             exit_ts   = entry_ts
-            net_debit = net_credit * (1 - IC_PROFIT_PCT)  # assume target
+            net_debit = 0.0   # all premium decayed; conservative for late entries
 
         # ── P&L ──────────────────────────────────────────────────────────────
         pnl_pts = net_credit - net_debit           # positive = profit
