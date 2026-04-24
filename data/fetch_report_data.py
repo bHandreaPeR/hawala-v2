@@ -302,18 +302,32 @@ def _html_unescape(text):
 
 
 # Priority RSS sources — each tagged with a default category
+# Reuters feeds (feeds.reuters.com) were shut down — replaced with live alternatives
 _NEWS_FEEDS = [
-    # Reuters top global + business
-    ("https://feeds.reuters.com/reuters/topNews",       "global"),
-    ("https://feeds.reuters.com/reuters/businessNews",  "macro"),
+    # Tier-1 financial publishers (verified live feeds)
+    ("https://feeds.bbci.co.uk/news/business/rss.xml",                                                                                "global"),
+    ("https://www.cnbc.com/id/10000664/device/rss/rss.html",                                                                          "global"),
+    ("https://rss.nytimes.com/services/xml/rss/nyt/Business.xml",                                                                     "macro"),
+    ("https://economictimes.indiatimes.com/rssfeedstopstories.cms",                                                                    "india"),
+    ("https://www.livemint.com/rss/markets",                                                                                           "india"),
     # Targeted Google News queries
-    ("https://news.google.com/rss/search?q=US+federal+reserve+OR+RBI+OR+ECB+interest+rate+OR+central+bank&hl=en&gl=US&ceid=US:en", "macro"),
-    ("https://news.google.com/rss/search?q=bitcoin+ethereum+crypto+market&hl=en&gl=US&ceid=US:en",                                   "crypto"),
+    ("https://news.google.com/rss/search?q=US+federal+reserve+OR+RBI+OR+ECB+interest+rate+OR+central+bank&hl=en&gl=US&ceid=US:en",   "macro"),
+    ("https://news.google.com/rss/search?q=bitcoin+ethereum+crypto+market&hl=en&gl=US&ceid=US:en",                                    "crypto"),
     ("https://news.google.com/rss/search?q=geopolitical+risk+OR+iran+OR+china+tariff+OR+russia+ukraine+OR+middle+east&hl=en&gl=US&ceid=US:en", "global"),
-    ("https://news.google.com/rss/search?q=oil+crude+opec+brent&hl=en&gl=US&ceid=US:en",                                             "energy"),
-    ("https://news.google.com/rss/search?q=india+RBI+SEBI+nifty+sensex+economy&hl=en-IN&gl=IN&ceid=IN:en",                          "india"),
-    ("https://news.google.com/rss/search?q=S%26P500+nasdaq+dow+jones+wall+street&hl=en&gl=US&ceid=US:en",                           "global"),
+    ("https://news.google.com/rss/search?q=oil+crude+opec+brent&hl=en&gl=US&ceid=US:en",                                              "energy"),
+    ("https://news.google.com/rss/search?q=india+RBI+SEBI+nifty+sensex+economy&hl=en-IN&gl=IN&ceid=IN:en",                           "india"),
+    ("https://news.google.com/rss/search?q=S%26P500+nasdaq+dow+jones+wall+street&hl=en&gl=US&ceid=US:en",                            "global"),
 ]
+
+# Map feed URL prefix → display source name (for the news card)
+_FEED_SOURCE = {
+    "feeds.bbci.co.uk":          "BBC Business",
+    "www.cnbc.com":               "CNBC",
+    "rss.nytimes.com":            "NY Times",
+    "economictimes.indiatimes":   "Economic Times",
+    "www.livemint.com":           "Livemint",
+    "news.google.com":            "Google News",
+}
 
 # High-signal keywords that boost an item to "must include"
 _HIGH_PRIORITY = [
@@ -324,15 +338,27 @@ _HIGH_PRIORITY = [
 ]
 
 
+def _feed_source_name(url: str) -> str:
+    """Return a human-readable source label for a feed URL."""
+    for key, name in _FEED_SOURCE.items():
+        if key in url:
+            return name
+    return "News"
+
+
 def _fetch_news():
     """Fetch high-priority global financial & geopolitical news from multiple RSS feeds."""
     HDR = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
     seen, results = set(), []
+    is_google_news = False
 
     for url, default_tag in _NEWS_FEEDS:
+        source_name = _feed_source_name(url)
+        is_google_news = "news.google.com" in url
         try:
             r = requests.get(url, timeout=8, headers=HDR)
             if not r.ok:
+                print(f"  ⚠ News feed {source_name} HTTP {r.status_code}")
                 continue
             # Extract <item> blocks first, then pull <title> from each
             items_xml = re.findall(r"<item>(.*?)</item>", r.text, re.DOTALL)
@@ -341,8 +367,11 @@ def _fetch_news():
                 if not title_m:
                     continue
                 raw = _html_unescape(title_m.group(1)).strip()
-                # Strip " - Source Name" suffixes
-                raw = re.sub(r"\s*[-|]\s*[A-Z][^-|]{3,40}$", "", raw).strip()
+                # Strip CDATA wrapper if present (e.g. BBC RSS)
+                raw = re.sub(r"^<!\[CDATA\[(.*)\]\]>$", r"\1", raw, flags=re.DOTALL).strip()
+                # Google News appends " - Source Name" — strip it; direct feeds are already clean
+                if is_google_news:
+                    raw = re.sub(r"\s*[-|]\s*[A-Z][^-|]{3,40}$", "", raw).strip()
                 # Skip very short, duplicates, or boilerplate
                 if len(raw) < 25 or raw in seen:
                     continue
@@ -353,9 +382,9 @@ def _fetch_news():
                 # Compute priority score
                 hl_lower = raw.lower()
                 priority = sum(1 for kw in _HIGH_PRIORITY if kw in hl_lower)
-                results.append({"headline": raw, "tag": tag, "priority": priority})
+                results.append({"headline": raw, "tag": tag, "source": source_name, "priority": priority})
         except Exception as e:
-            print(f"  ⚠ News feed {url[:50]}: {e}")
+            print(f"  ⚠ News feed {source_name} ({url[:45]}): {e}")
             continue
 
     if not results:
@@ -382,8 +411,7 @@ def _fetch_news():
             tag_counts[item["tag"]] = tag_counts.get(item["tag"], 0) + 1
             selected.append(item)
 
-    # Remove priority key before returning
-    return [{"headline": i["headline"], "tag": i["tag"]} for i in selected[:7]]
+    return [{"headline": i["headline"], "tag": i["tag"], "source": i["source"]} for i in selected[:7]]
 
 
 def _classify_news(headline):
@@ -1002,6 +1030,8 @@ def fetch_all() -> dict:
         "asian_markets":     asian_markets,
         "europe_markets":    europe_markets,
         "commodities_spot":  commodities_spot,
+        # mcx_futures: subset of commodities_spot for the MCX-specific section in the report
+        "mcx_futures":       [c for c in commodities_spot if c["name"].startswith("MCX")],
         "crypto":            crypto,
         "currencies":        currencies,
         "fii_dii":           fii_dii,
