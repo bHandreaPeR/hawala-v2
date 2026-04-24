@@ -36,9 +36,10 @@ def _load_env():
 def main():
     env = _load_env()
     tg_token   = env.get("TELEGRAM_BOT_TOKEN", "")
-    tg_chat_id = env.get("TELEGRAM_CHAT_ID", "")
+    TG_CHAT_IDS = env.get('TELEGRAM_CHAT_IDS', '').split(',')
+    TG_CHAT_IDS = [cid.strip() for cid in TG_CHAT_IDS if cid.strip()]
 
-    if not tg_token or not tg_chat_id:
+    if not tg_token or not TG_CHAT_IDS[0]:
         print("⚠  Telegram credentials not set in token.env — PDF will be generated but NOT sent")
 
     # ── Step 1: Fetch all data ────────────────────────────────────────────
@@ -121,7 +122,7 @@ def main():
         print(f"  ℹ️  PDF (reportlab fallback) → {pdf_path}")
 
     # ── Step 4: Send Telegram ─────────────────────────────────────────────
-    if not (tg_token and tg_chat_id):
+    if not (tg_token and TG_CHAT_IDS[0]):
         print("⚠  Telegram not configured — skipping send")
         return
 
@@ -164,15 +165,17 @@ def main():
     )
 
     print("\n📤 Sending Telegram summary...")
-    send(tg_token, tg_chat_id, summary)
+    for chat_id in TG_CHAT_IDS:
+        send(tg_token, chat_id, summary)
 
     print("📤 Sending PDF...")
-    send_document(
-        tg_token,
-        tg_chat_id,
-        str(pdf_path),
-        caption=f"Hawala v2 Pre-Market Report — {date_str}",
-    )
+    for chat_id in TG_CHAT_IDS:
+        send_document(
+            tg_token,
+            chat_id,
+            str(pdf_path),
+            caption=f"Hawala v2 Pre-Market Report — {date_str}",
+        )
 
     print("\n✅  Done.")
 

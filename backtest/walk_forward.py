@@ -169,13 +169,18 @@ if __name__ == '__main__':
     import os, sys
     from dotenv import load_dotenv
     load_dotenv('token.env')
-    TOKEN = os.getenv('GROWW_API_KEY', '').strip()
+    TOKEN       = os.getenv('GROWW_API_KEY', '').strip()
+    TOTP_SECRET = os.getenv('GROWW_TOTP_SECRET', '').strip()
     if not TOKEN:
         sys.exit("❌  GROWW_API_KEY not found in token.env")
+    if not TOTP_SECRET:
+        sys.exit("❌  GROWW_TOTP_SECRET not found in token.env")
+    import pyotp
     from growwapi import GrowwAPI
     from data.fetch import fetch_instrument
 
-    groww    = GrowwAPI(TOKEN)
+    access_token = GrowwAPI.get_access_token(api_key=TOKEN, totp=pyotp.TOTP(TOTP_SECRET).now())
+    groww    = GrowwAPI(access_token)
     print("✅  Groww authenticated")
 
     INSTRUMENT = 'BANKNIFTY'

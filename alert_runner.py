@@ -22,23 +22,32 @@ from datetime import datetime, date, timedelta
 from datetime import time as dtime
 
 import pytz
+import pyotp
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv('token.env')
 GROWW_TOKEN = os.getenv('GROWW_API_KEY', '').strip()
+GROWW_SECRET = os.getenv('GROWW_TOTP_SECRET', '').strip()
 TG_TOKEN    = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
-TG_CHAT_ID  = os.getenv('TELEGRAM_CHAT_ID', '').strip()
+TG_CHAT_IDS = os.getenv('TELEGRAM_CHAT_IDS', '').split(',')
+TG_CHAT_IDS = [cid.strip() for cid in TG_CHAT_IDS if cid.strip()]
 
 for _name, _val in [('GROWW_API_KEY', GROWW_TOKEN),
+                    ('GROWW_TOTP_SECRET', GROWW_SECRET),
                     ('TELEGRAM_BOT_TOKEN', TG_TOKEN),
-                    ('TELEGRAM_CHAT_ID', TG_CHAT_ID)]:
+                    ('TELEGRAM_CHAT_IDS', TG_CHAT_IDS)]:
     if not _val:
         sys.exit(f"❌  {_name} not found in token.env")
 
 from growwapi import GrowwAPI
-groww = GrowwAPI(GROWW_TOKEN)
+
+totp_gen = pyotp.TOTP(GROWW_SECRET)
+current_totp = totp_gen.now()
+
+access_token = GrowwAPI.get_access_token(api_key=GROWW_TOKEN, totp=current_totp)
+groww = GrowwAPI(access_token)
 print("✅  Groww authenticated")
 
 from config import INSTRUMENTS, STRATEGIES
@@ -142,7 +151,8 @@ def morning_report(hist: pd.DataFrame, today: date) -> dict:
         time.sleep(30)
 
     if first_candle.empty:
-        tg(TG_TOKEN, TG_CHAT_ID, "⚠️ <b>HAWALA</b>\nCould not fetch today's opening candle — possible holiday or data issue.")
+        for chat_id in TG_CHAT_IDS:
+            tg(TG_TOKEN, chat_id, "⚠️ <b>HAWALA</b>\nCould not fetch today's opening candle — possible holiday or data issue.")
         return {}
 
     today_open = float(first_candle['Open'].iloc[0])
@@ -193,7 +203,8 @@ def morning_report(hist: pd.DataFrame, today: date) -> dict:
         f"{watch_note}\n"
         f"Squareoff: {sq_time}"
     )
-    tg(TG_TOKEN, TG_CHAT_ID, msg)
+    for chat_id in TG_CHAT_IDS:
+            tg(TG_TOKEN, chat_id, msg)
     print(f"  📤  Gap report sent: {gap_pts:+.0f} pts → {strategy}")
 
     return {
@@ -219,7 +230,8 @@ def watch_orb_entry(today_str: str, gap_info: dict) -> dict | None:
     orb_data    = fetch_today(today_str)
     orb_candles = orb_data.between_time('09:15', '09:30') if not orb_data.empty else pd.DataFrame()
     if orb_candles.empty:
-        tg(TG_TOKEN, TG_CHAT_ID, "⚠️ <b>HAWALA</b>\nNo ORB candles found — skipping today.")
+        for chat_id in TG_CHAT_IDS:
+            tg(TG_TOKEN, chat_id, "⚠️ <b>HAWALA</b>\nNo ORB candles found — skipping today.")
         return None
 
     orb_high = float(orb_candles['High'].max())
@@ -229,14 +241,18 @@ def watch_orb_entry(today_str: str, gap_info: dict) -> dict | None:
     for _, c in orb_candles.iterrows():
         cl = float(c['Close'])
         if gap_dir == 1 and cl <= prev_close:
-            tg(TG_TOKEN, TG_CHAT_ID, "⚠️ <b>HAWALA</b>\nGap filled during ORB window — no trade today.")
+            for chat_id in TG_CHAT_IDS:
+                tg(TG_TOKEN, chat_id, "⚠️ <b>HAWALA</b>\nGap filled during ORB window — no trade today.")
             return None
         if gap_dir == -1 and cl >= prev_close:
-            tg(TG_TOKEN, TG_CHAT_ID, "⚠️ <b>HAWALA</b>\nGap filled during ORB window — no trade today.")
+            for chat_id in TG_CHAT_IDS:
+                tg(TG_TOKEN, chat_id, "⚠️ <b>HAWALA</b>\nGap filled during ORB window — no trade today.")
             return None
 
     print(f"  ORB range locked: Low {orb_low:.0f}  High {orb_high:.0f}")
-    tg(TG_TOKEN, TG_CHAT_ID,
+
+    for chat_id in TG_CHAT_IDS:
+        tg(TG_TOKEN, chat_id, 
        f"👀 <b>HAWALA — watching for breakout</b>\n"
        f"ORB range: {orb_low:.0f} – {orb_high:.0f}\n"
        f"{'Watching CE (gap up)' if gap_dir==1 else 'Watching PE (gap down)'}\n"
@@ -258,9 +274,10 @@ def watch_orb_entry(today_str: str, gap_info: dict) -> dict | None:
             seen_ts.add(fidx)
 
             if fidx.time() >= sq_time:
-                tg(TG_TOKEN, TG_CHAT_ID,
-                   f"⏹ <b>HAWALA {gap_info['strategy']}</b>\n"
-                   f"Squareoff time reached — no breakout entry today.")
+                for chat_id in TG_CHAT_IDS:
+                    tg(TG_TOKEN, chat_id,
+                       f"⏹ <b>HAWALA {gap_info['strategy']}</b>\n"
+                       f"Squareoff time reached — no breakout entry today.")
                 return None
 
             c_close = float(frow['Close'])
@@ -326,9 +343,9 @@ def watch_vwap_entry(today_str: str, gap_info: dict) -> dict | None:
                     setup_dir = -1
 
         time.sleep(60)
-
-    tg(TG_TOKEN, TG_CHAT_ID,
-       "⏹ <b>HAWALA VWAP</b>\n13:30 reached without a valid reversion entry — no trade today.")
+    for chat_id in TG_CHAT_IDS:
+        tg(TG_TOKEN, chat_id,
+           "⏹ <b>HAWALA VWAP</b>\n13:30 reached without a valid reversion entry — no trade today.")
     return None
 
 
@@ -351,7 +368,8 @@ def send_orb_entry(entry_info: dict, gap_info: dict) -> dict:
         f"Gap: {gap_info['gap_pts']:+.0f} pts  |  ATR14: {atr14:.0f}\n"
         f"Time: {t}"
     )
-    tg(TG_TOKEN, TG_CHAT_ID, msg)
+    for chat_id in TG_CHAT_IDS:
+        tg(TG_TOKEN, chat_id, msg)
     return {'stop': stop, 'target': target, 'direction': gdir, 'entry': ef}
 
 
@@ -373,7 +391,8 @@ def send_opt_entry(entry_info: dict, gap_info: dict, opt_info: dict) -> dict:
         f"Gap: {gap_info['gap_pts']:+.0f} pts  |  ATR14: {gap_info['atr14']:.0f}\n"
         f"Time: {t}"
     )
-    tg(TG_TOKEN, TG_CHAT_ID, msg)
+    for chat_id in TG_CHAT_IDS:
+        tg(TG_TOKEN, chat_id, msg)
     return {'stop': stop, 'target': target}
 
 
@@ -396,7 +415,8 @@ def send_vwap_entry(entry_info: dict, gap_info: dict) -> dict:
         f"ATR14: {atr14:.0f}\n"
         f"Time: {t}"
     )
-    tg(TG_TOKEN, TG_CHAT_ID, msg)
+    for chat_id in TG_CHAT_IDS:
+        tg(TG_TOKEN, chat_id, msg)
     return {'stop': stop, 'target': target, 'direction': direction, 'entry': entry}
 
 
@@ -416,7 +436,8 @@ def _fmt_exit(strategy: str, reason: str, exit_px: float, entry_px: float,
         f"P&L est: {sign}₹{pnl_rs:,.0f}  ({pnl_pts:+.0f} pts × {LOT_SIZE} lots)\n"
         f"Time: {t}"
     )
-    tg(TG_TOKEN, TG_CHAT_ID, msg)
+    for chat_id in TG_CHAT_IDS:
+        tg(TG_TOKEN, chat_id, msg)
 
 
 def _fmt_opt_exit(reason: str, exit_prem: float, entry_prem: float,
@@ -434,7 +455,8 @@ def _fmt_opt_exit(reason: str, exit_prem: float, entry_prem: float,
         f"P&L est: {sign}₹{pnl_rs:,.0f}  ({pnl_pts:+.0f} pts × {LOT_SIZE} lots)\n"
         f"Time: {t}"
     )
-    tg(TG_TOKEN, TG_CHAT_ID, msg)
+    for chat_id in TG_CHAT_IDS:
+        tg(TG_TOKEN, chat_id, msg)
 
 
 def watch_exit_futures(today_str: str, strategy: str,
@@ -562,7 +584,8 @@ def run_day() -> None:
                             groww=groww, use_futures=True)
     if hist.empty:
         print("  ❌  History fetch failed.")
-        tg(TG_TOKEN, TG_CHAT_ID, "❌ <b>HAWALA</b>\nFailed to fetch historical data — runner aborted.")
+        for chat_id in TG_CHAT_IDS:
+            tg(TG_TOKEN, chat_id, "❌ <b>HAWALA</b>\nFailed to fetch historical data — runner aborted.")
         return
 
     gap_info = morning_report(hist, today)
