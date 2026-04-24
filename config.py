@@ -150,6 +150,34 @@ STRATEGIES = {
             'WICK_RATIO':    2.0,
         },
     },
+    'iron_condor': {
+        'module':   'strategies.iron_condor',
+        'function': 'run_iron_condor',
+        'params': {
+            # Expiry gate
+            'IC_EXPIRY_ONLY':            True,    # Only fire on expiry day
+            'IC_DTE_MAX':                1,        # Max DTE to enter (0 or 1)
+            # Filter gates
+            'IC_VIX_MIN':                15.0,     # Skip if VIX below (no premium)
+            'IC_VIX_MAX':                22.0,     # Skip if VIX above (explosive)
+            'IC_MAX_GAP':                150,      # Skip if |gap| > 150 pts (directional day)
+            'IC_DOW_ALLOW':              [3],      # Thursday only (expiry day)
+            # Strike selection (ATR-based, rounded to nearest 100)
+            'IC_CALL_ATR':               0.50,     # Short call: spot + 0.5×ATR14
+            'IC_PUT_ATR':                0.50,     # Short put:  spot − 0.5×ATR14
+            'IC_WING_WIDTH':             300,      # Wing spread in pts (defines max loss per leg)
+            # Exit rules
+            'IC_PROFIT_TARGET_PCT':      0.60,     # Exit at 60% of net credit collected
+            'IC_STOP_LOSS_MULT':         2.0,      # Stop when net debit = 2× net credit received
+            'IC_BREACH_BUFFER':          50,       # Exit if spot within 50 pts of short strike
+            'IC_ENTRY_AFTER':            '09:30',  # Entry window start
+            'IC_SQUAREOFF':              '14:00',  # Hard exit before settlement gamma risk
+            # Capital / risk
+            'IC_MARGIN_CAP_PCT':         0.60,     # Max 60% equity as margin (conservative)
+            'IC_MIN_NET_CREDIT':         50,       # Skip if net credit < 50 pts (not worth the risk)
+            'IC_CONSECUTIVE_LOSS_LIMIT': 2,        # Skip after 2 consecutive expiry losses
+        },
+    },
 }
 
 # ── Capital Model ─────────────────────────────────────────────────────────────

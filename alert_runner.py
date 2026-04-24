@@ -54,6 +54,7 @@ from config import INSTRUMENTS, STRATEGIES
 from data.fetch import fetch_instrument
 from data.options_fetch import get_nearest_expiry, fetch_option_candles, lookup_option_price
 from alerts.telegram import send as tg
+from strategies.iron_condor import _bs_price as _ic_bs_price
 
 IST        = pytz.timezone('Asia/Kolkata')
 INSTRUMENT = 'BANKNIFTY'
@@ -61,6 +62,7 @@ inst_cfg   = INSTRUMENTS[INSTRUMENT]
 orb_p      = STRATEGIES['orb']['params']
 vwap_p     = STRATEGIES['vwap_reversion']['params']
 opt_p      = STRATEGIES['options_orb']['params']
+ic_p       = STRATEGIES['iron_condor']['params']
 
 LOT_SIZE        = inst_cfg['lot_size']
 MIN_GAP         = inst_cfg['min_gap']
@@ -76,6 +78,7 @@ TGT_ATR_ORB     = orb_p['ORB_TARGET_ATR']
 OPT_TGT_MULT    = opt_p['OPTIONS_TARGET_MULT']
 OPT_STP_MULT    = opt_p['OPTIONS_STOP_MULT']
 OPT_SQUAREOFF   = dtime(*[int(x) for x in opt_p['OPTIONS_SQUAREOFF'].split(':')])
+IC_SQUAREOFF    = dtime(*[int(x) for x in ic_p['IC_SQUAREOFF'].split(':')])
 STRIKE_INTERVAL = inst_cfg['strike_interval']
 UNDERLYING      = inst_cfg['underlying_symbol']
 
@@ -620,6 +623,322 @@ def watch_exit_options(today_str: str, entry_info: dict,
         time.sleep(60)
 
 
+# ── Iron Condor live execution ────────────────────────────────────────────────
+
+def _is_expiry_today() -> tuple[bool, object]:
+    """Return (True, expiry_date) if today is a BANKNIFTY expiry day, else (False, None)."""
+    today = date.today()
+    try:
+        exp = get_nearest_expiry(groww, UNDERLYING, today, min_days=0)
+        if exp is not None and pd.Timestamp(exp).date() == today:
+            return True, exp
+    except Exception as e:
+        print(f"  ⚠  Expiry check error: {e}")
+    return False, None
+
+
+def _fetch_ic_premium(expiry, strike: int, opt_type: str,
+                      today_str: str, entry_ts) -> float:
+    """Fetch option premium at entry_ts from Groww candles."""
+    try:
+        opt_df = fetch_option_candles(groww, UNDERLYING, expiry,
+                                      strike, opt_type, today_str, today_str)
+        if not opt_df.empty:
+            px = lookup_option_price(opt_df, entry_ts, field='Open')
+            if px and float(px) > 0:
+                return float(px)
+    except Exception as e:
+        print(f"  ⚠  IC premium fetch {opt_type} {strike}: {e}")
+    return 0.0
+
+
+def _fetch_ic_exit_premium(expiry, strike: int, opt_type: str,
+                           today_str: str, check_ts) -> float:
+    """Fetch latest option premium for exit check."""
+    try:
+        opt_df = fetch_option_candles(groww, UNDERLYING, expiry,
+                                      strike, opt_type, today_str, today_str)
+        if not opt_df.empty:
+            px = lookup_option_price(opt_df, check_ts, field='Open')
+            if px:
+                return float(px)
+            # Fall back to last available close
+            return float(opt_df['Close'].iloc[-1])
+    except Exception:
+        pass
+    return 0.0
+
+
+def _log_ic_trade(today: date, entry_ts, exit_ts, exit_reason: str,
+                  call_short: int, put_short: int, call_long: int, put_long: int,
+                  net_credit: float, net_debit: float, expiry, atr14: float,
+                  vix: float, gap_pts: float) -> None:
+    """Log the IC trade to live_trades.csv."""
+    pnl_pts = net_credit - net_debit
+    pnl_rs  = round(pnl_pts * LOT_SIZE - 40 * 4, 2)   # 4 legs × ₹40 brokerage
+    _log_trade({
+        'date':        today.isoformat(),
+        'weekday':     _DAY_NAMES[today.weekday()],
+        'strategy':    'IC',
+        'ticker':      (f'IC {call_short}CE/{put_short}PE '
+                        f'[{call_long}CE/{put_long}PE wings]'),
+        'direction':   'SHORT_STRANGLE',
+        'entry':       round(net_credit, 2),
+        'entry_time':  entry_ts.strftime('%H:%M') if hasattr(entry_ts, 'strftime') else str(entry_ts),
+        'exit':        round(net_debit, 2),
+        'exit_time':   exit_ts.strftime('%H:%M') if hasattr(exit_ts, 'strftime') else str(exit_ts),
+        'exit_reason': exit_reason,
+        'pnl_pts':     round(pnl_pts, 2),
+        'pnl_rs':      pnl_rs,
+        'lots':        1,
+        'lot_size':    LOT_SIZE,
+        'gap_pts':     round(gap_pts, 0),
+        'atr14':       round(atr14, 0),
+    })
+
+
+def run_iron_condor_live(gap_info: dict, hist: pd.DataFrame) -> None:
+    """
+    Live Iron Condor execution on expiry day.
+    Called from run_day() when today is a BANKNIFTY expiry day.
+    Sends Telegram alerts for entry and exit; logs trade to live_trades.csv.
+    """
+    today      = date.today()
+    today_str  = str(today)
+    atr14      = gap_info['atr14']
+    gap_pts    = gap_info['gap_pts']
+    today_open = gap_info['today_open']
+
+    # ── Consecutive loss guard ─────────────────────────────────────────────
+    loss_limit = ic_p['IC_CONSECUTIVE_LOSS_LIMIT']
+    log_path   = TRADE_LOG_DIR / 'live_trades.csv'
+    if log_path.exists():
+        try:
+            prev = pd.read_csv(log_path)
+            prev = prev[prev['strategy'] == 'IC'].tail(loss_limit)
+            if len(prev) == loss_limit and (prev['pnl_rs'] < 0).all():
+                msg = (f"🚧 <b>IRON CONDOR — Skipped</b>\n"
+                       f"{loss_limit} consecutive losses — sitting out this expiry.\n"
+                       f"Today: {today.strftime('%d %b %Y')}")
+                for chat_id in TG_CHAT_IDS:
+                    tg(TG_TOKEN, chat_id, msg)
+                print(f"  🚧 IC: {loss_limit} consecutive losses — skip.")
+                return
+        except Exception:
+            pass
+
+    # ── Gap gate ───────────────────────────────────────────────────────────
+    if abs(gap_pts) > ic_p['IC_MAX_GAP']:
+        msg = (f"🚧 <b>IRON CONDOR — Gap too large</b>\n"
+               f"Gap: {gap_pts:+.0f} pts > {ic_p['IC_MAX_GAP']} pts limit\n"
+               f"Skipping IC on this expiry day.")
+        for chat_id in TG_CHAT_IDS:
+            tg(TG_TOKEN, chat_id, msg)
+        print(f"  🚧 IC: gap {gap_pts:+.0f} > {ic_p['IC_MAX_GAP']} — skip.")
+        return
+
+    # ── VIX gate ───────────────────────────────────────────────────────────
+    vix_val = None
+    sig_path = TRADE_LOG_DIR / f'market_signal_{today_str}.json'
+    if sig_path.exists():
+        try:
+            import json
+            sig = json.loads(sig_path.read_text())
+            vix_val = sig.get('hawala_signal', {}).get('india_vix')
+            if vix_val:
+                vix_val = float(vix_val)
+        except Exception:
+            pass
+    if vix_val is None:
+        try:
+            import yfinance as yf
+            vix_df  = yf.download('^INDIAVIX', period='2d', progress=False)
+            vix_val = float(vix_df['Close'].iloc[-1]) if not vix_df.empty else None
+        except Exception:
+            pass
+
+    if vix_val is not None:
+        if vix_val < ic_p['IC_VIX_MIN'] or vix_val > ic_p['IC_VIX_MAX']:
+            msg = (f"🚧 <b>IRON CONDOR — VIX out of range</b>\n"
+                   f"VIX: {vix_val:.1f}  (allowed: {ic_p['IC_VIX_MIN']}–{ic_p['IC_VIX_MAX']})\n"
+                   f"Skipping IC.")
+            for chat_id in TG_CHAT_IDS:
+                tg(TG_TOKEN, chat_id, msg)
+            print(f"  🚧 IC: VIX {vix_val:.1f} out of band — skip.")
+            return
+    else:
+        print("  ⚠  IC: VIX unavailable — proceeding without VIX gate.")
+        vix_val = 0.0
+
+    # ── Wait for entry window ──────────────────────────────────────────────
+    entry_after = dtime(*[int(x) for x in ic_p['IC_ENTRY_AFTER'].split(':')])
+    sleep_until(entry_after)
+
+    today_data = fetch_today(today_str)
+    entry_candles = (today_data.between_time(ic_p['IC_ENTRY_AFTER'],
+                                             ic_p['IC_ENTRY_AFTER'])
+                     if not today_data.empty else pd.DataFrame())
+
+    if entry_candles.empty:
+        # Use today_open as proxy spot
+        spot = today_open
+        entry_ts = now_ist()
+    else:
+        spot     = float(entry_candles['Open'].iloc[0])
+        entry_ts = entry_candles.index[0]
+
+    # ── Strike selection ───────────────────────────────────────────────────
+    si          = inst_cfg['strike_interval']   # 100
+    call_short  = int(np.ceil(spot + atr14 * ic_p['IC_CALL_ATR'] / si) * si)
+    put_short   = int(np.floor(spot - atr14 * ic_p['IC_PUT_ATR'] / si) * si)
+    call_long   = call_short + ic_p['IC_WING_WIDTH']
+    put_long    = put_short  - ic_p['IC_WING_WIDTH']
+
+    is_expiry, expiry_date = _is_expiry_today()
+    expiry_str = str(expiry_date) if expiry_date else today_str
+
+    # ── Fetch premiums ─────────────────────────────────────────────────────
+    cs_prem = _fetch_ic_premium(expiry_date, call_short, 'CE', today_str, entry_ts)
+    ps_prem = _fetch_ic_premium(expiry_date, put_short,  'PE', today_str, entry_ts)
+    cl_prem = _fetch_ic_premium(expiry_date, call_long,  'CE', today_str, entry_ts)
+    pl_prem = _fetch_ic_premium(expiry_date, put_long,   'PE', today_str, entry_ts)
+
+    # BS proxy fallback for any leg with 0 premium
+    T = max(1.0 / (365 * 6.5), (dtime(15, 30).hour * 60 - now_ist().hour * 60) / (365 * 24 * 60))
+    r, sigma = 0.065, 0.26
+    if cs_prem <= 0: cs_prem = _ic_bs_price(spot, call_short, T, r, sigma, 'call')
+    if ps_prem <= 0: ps_prem = _ic_bs_price(spot, put_short,  T, r, sigma, 'put')
+    if cl_prem <= 0: cl_prem = _ic_bs_price(spot, call_long,  T, r, sigma, 'call')
+    if pl_prem <= 0: pl_prem = _ic_bs_price(spot, put_long,   T, r, sigma, 'put')
+
+    net_credit     = (cs_prem + ps_prem) - (cl_prem + pl_prem)
+    max_profit_pts = net_credit
+    max_loss_pts   = ic_p['IC_WING_WIDTH'] - net_credit
+    upper_be       = call_short + net_credit
+    lower_be       = put_short  - net_credit
+
+    # ── Min credit gate ────────────────────────────────────────────────────
+    if net_credit < ic_p['IC_MIN_NET_CREDIT']:
+        msg = (f"🚧 <b>IRON CONDOR — Credit too low</b>\n"
+               f"Net credit: {net_credit:.0f} pts < {ic_p['IC_MIN_NET_CREDIT']} min\n"
+               f"Skipping IC.")
+        for chat_id in TG_CHAT_IDS:
+            tg(TG_TOKEN, chat_id, msg)
+        print(f"  🚧 IC: net credit {net_credit:.0f} < {ic_p['IC_MIN_NET_CREDIT']} — skip.")
+        return
+
+    # ── Entry alert ────────────────────────────────────────────────────────
+    pnl_per_lot_max   = round(max_profit_pts * LOT_SIZE, 0)
+    loss_per_lot_max  = round(max_loss_pts   * LOT_SIZE, 0)
+    target_debit      = net_credit * (1 - ic_p['IC_PROFIT_TARGET_PCT'])
+    entry_msg = (
+        f"🦅 <b>IRON CONDOR — Expiry Day</b>\n\n"
+        f"<b>BANKNIFTY</b>  |  Expiry: {expiry_str}  |  VIX: {vix_val:.1f}\n"
+        f"Spot: ₹{spot:.0f}  |  ATR14: {atr14:.0f}\n\n"
+        f"SELL {call_short} CE @ <b>{cs_prem:.0f}</b>  |  BUY {call_long} CE @ {cl_prem:.0f}\n"
+        f"SELL {put_short} PE @ <b>{ps_prem:.0f}</b>  |  BUY {put_long} PE @ {pl_prem:.0f}\n\n"
+        f"Net Credit: <b>{net_credit:.0f} pts</b>  (₹{net_credit*LOT_SIZE:,.0f}/lot)\n"
+        f"Max Profit: ₹{pnl_per_lot_max:,.0f}  |  Max Loss: ₹{loss_per_lot_max:,.0f}\n"
+        f"Break-even zone: {lower_be:.0f} – {upper_be:.0f}\n"
+        f"Target exit when debit ≤ {target_debit:.0f} pts ({ic_p['IC_PROFIT_TARGET_PCT']*100:.0f}% collected)\n"
+        f"Squareoff: {ic_p['IC_SQUAREOFF']} IST"
+    )
+    for chat_id in TG_CHAT_IDS:
+        tg(TG_TOKEN, chat_id, entry_msg)
+    print(f"  📤  IC entry sent: net_credit={net_credit:.0f} pts  "
+          f"strikes {put_short}P/{call_short}C  wings ±{ic_p['IC_WING_WIDTH']}")
+
+    # ── Monitoring loop ────────────────────────────────────────────────────
+    profit_target_debit = net_credit * (1 - ic_p['IC_PROFIT_TARGET_PCT'])
+    stop_loss_debit     = net_credit * ic_p['IC_STOP_LOSS_MULT']
+    seen_ts             = set()
+    exit_reason         = None
+    net_debit_exit      = net_credit   # default: no change
+
+    while now_ist().time() < IC_SQUAREOFF:
+        time.sleep(60)
+        n          = now_ist()
+        today_data = fetch_today(today_str)
+
+        if today_data.empty:
+            continue
+
+        # Latest futures spot
+        latest_fut = today_data.iloc[-1]
+        spot_now   = float(latest_fut['Close'])
+        latest_ts  = today_data.index[-1]
+
+        if latest_ts in seen_ts:
+            continue
+        seen_ts.add(latest_ts)
+
+        # ── Breach guard (spot approaching short strike) ───────────────
+        breach_buf = ic_p['IC_BREACH_BUFFER']
+        if (spot_now >= call_short - breach_buf or
+                spot_now <= put_short + breach_buf):
+            # Fetch exit premiums
+            cs_exit = _fetch_ic_exit_premium(expiry_date, call_short, 'CE', today_str, latest_ts)
+            ps_exit = _fetch_ic_exit_premium(expiry_date, put_short,  'PE', today_str, latest_ts)
+            cl_exit = _fetch_ic_exit_premium(expiry_date, call_long,  'CE', today_str, latest_ts)
+            pl_exit = _fetch_ic_exit_premium(expiry_date, put_long,   'PE', today_str, latest_ts)
+            net_debit_exit = (cs_exit + ps_exit) - (cl_exit + pl_exit)
+            exit_reason    = 'BREACH EXIT'
+            break
+
+        # ── Fetch current net debit to close ──────────────────────────
+        try:
+            cs_exit = _fetch_ic_exit_premium(expiry_date, call_short, 'CE', today_str, latest_ts)
+            ps_exit = _fetch_ic_exit_premium(expiry_date, put_short,  'PE', today_str, latest_ts)
+            cl_exit = _fetch_ic_exit_premium(expiry_date, call_long,  'CE', today_str, latest_ts)
+            pl_exit = _fetch_ic_exit_premium(expiry_date, put_long,   'PE', today_str, latest_ts)
+            current_debit = (cs_exit + ps_exit) - (cl_exit + pl_exit)
+        except Exception as e:
+            print(f"  ⚠  IC monitor fetch error: {e}")
+            continue
+
+        if current_debit <= profit_target_debit:
+            net_debit_exit = current_debit
+            exit_reason    = 'TARGET HIT'
+            break
+
+        if current_debit >= stop_loss_debit:
+            net_debit_exit = current_debit
+            exit_reason    = 'STOP LOSS'
+            break
+
+    # ── Time squareoff ─────────────────────────────────────────────────────
+    if exit_reason is None:
+        exit_reason = 'SQUARE OFF'
+        # Fetch final premiums at squareoff
+        sq_ts = now_ist()
+        cs_exit = _fetch_ic_exit_premium(expiry_date, call_short, 'CE', today_str, sq_ts)
+        ps_exit = _fetch_ic_exit_premium(expiry_date, put_short,  'PE', today_str, sq_ts)
+        cl_exit = _fetch_ic_exit_premium(expiry_date, call_long,  'CE', today_str, sq_ts)
+        pl_exit = _fetch_ic_exit_premium(expiry_date, put_long,   'PE', today_str, sq_ts)
+        net_debit_exit = (cs_exit + ps_exit) - (cl_exit + pl_exit)
+
+    exit_ts  = now_ist()
+    pnl_pts  = net_credit - net_debit_exit
+    pnl_rs   = round(pnl_pts * LOT_SIZE - 40 * 4, 2)
+    icon     = '🎯' if pnl_rs > 0 else ('⏹' if exit_reason == 'SQUARE OFF' else '🛑')
+    sign     = '+' if pnl_rs >= 0 else ''
+    pct_coll = round((pnl_pts / net_credit * 100), 1) if net_credit else 0
+
+    exit_msg = (
+        f"{icon} <b>EXIT — Iron Condor ({exit_reason})</b>\n\n"
+        f"Net debit to close: {net_debit_exit:.0f} pts\n"
+        f"P&L: {sign}₹{pnl_rs:,.0f}/lot  ({pct_coll:+.1f}% of max profit)\n"
+        f"Time: {exit_ts.strftime('%H:%M')} IST"
+    )
+    for chat_id in TG_CHAT_IDS:
+        tg(TG_TOKEN, chat_id, exit_msg)
+    print(f"  📤  IC exit sent: {exit_reason}  pnl=₹{pnl_rs:,.0f}")
+
+    _log_ic_trade(today, entry_ts, exit_ts, exit_reason,
+                  call_short, put_short, call_long, put_long,
+                  net_credit, net_debit_exit, expiry_date, atr14, vix_val, gap_pts)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run_day() -> None:
@@ -644,6 +963,16 @@ def run_day() -> None:
         print("  ❌  History fetch failed.")
         for chat_id in TG_CHAT_IDS:
             tg(TG_TOKEN, chat_id, "❌ <b>HAWALA</b>\nFailed to fetch historical data — runner aborted.")
+        return
+
+    # ── Expiry day check — Iron Condor takes priority ─────────────────────
+    is_expiry, expiry_date = _is_expiry_today()
+    if is_expiry and dow == 3:   # Thursday expiry day
+        print(f"  📅  Expiry day detected ({expiry_date}) — routing to Iron Condor.")
+        # Still need gap_info for ATR14, gap_pts, today_open
+        gap_info = morning_report(hist, today)
+        if gap_info:
+            run_iron_condor_live(gap_info, hist)
         return
 
     gap_info = morning_report(hist, today)

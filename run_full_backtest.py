@@ -47,6 +47,7 @@ from data.fetch import fetch_instrument
 from strategies.orb import run_orb
 from strategies.vwap_reversion import run_vwap_reversion
 from strategies.options_orb import run_options_orb
+from strategies.iron_condor import run_iron_condor
 from backtest.engine import _lot_size_for_date
 from backtest.compounding_engine import run_compounded, print_compounded_report
 
@@ -71,6 +72,7 @@ inst_cfg    = INSTRUMENTS[INSTRUMENT]
 orb_params  = {**STRATEGIES['orb']['params'],             **inst_cfg.get('strategy_params', {})}
 vwap_params = {**STRATEGIES['vwap_reversion']['params'],  **inst_cfg.get('strategy_params', {})}
 opt_params  = {**STRATEGIES['options_orb']['params']}
+ic_params   = {**STRATEGIES['iron_condor']['params']}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -109,7 +111,11 @@ def _run_strategies(data: pd.DataFrame, label: str) -> pd.DataFrame:
     opt_log  = run_options_orb(data, inst_cfg, opt_params, groww=groww)
     print(f"     {len(opt_log)} trades")
 
-    frames = [df for df in [orb_log, vwap_log, opt_log] if not df.empty]
+    print(f"  → Iron Condor (0 DTE expiry day) ...")
+    ic_log   = run_iron_condor(data, inst_cfg, ic_params, groww=groww)
+    print(f"     {len(ic_log)} trades")
+
+    frames = [df for df in [orb_log, vwap_log, opt_log, ic_log] if not df.empty]
     if not frames:
         return pd.DataFrame()
 
