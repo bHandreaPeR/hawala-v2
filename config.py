@@ -157,17 +157,24 @@ STRATEGIES = {
             # Expiry gate
             'IC_EXPIRY_ONLY':            True,    # Only fire on expiry day
             'IC_DTE_MAX':                1,        # Max DTE to enter (0 or 1)
-            # Filter gates
-            'IC_VIX_MIN':                15.0,     # Skip if VIX below (no premium)
-            'IC_VIX_MAX':                22.0,     # Skip if VIX above (explosive)
+            # VIX regime filter — calibrated from 2021-2026 regime analysis:
+            #   VIX < 12    (LOW):     WR=90.9%, small losses  → include, 2 lots
+            #   VIX 12-15   (MID-LOW): WR=77.4%               → include, 1 lot
+            #   VIX 15-18   (MID):     WR=91.8%               → sweet spot, 3-4 lots
+            #   VIX 18-22   (MID-HIGH):WR=42.9%, high breach  → SKIP (worst regime)
+            #   VIX > 22    (HIGH):    explosive               → SKIP
+            # Upper cap is 18 — the 18-22 band looks good on paper (high IV = credit)
+            # but delivers 71% BREACH EXIT rate and only 42.9% WR.
+            'IC_VIX_MIN':                0.0,      # Include low-VIX regime (90.9% WR there)
+            'IC_VIX_MAX':                18.0,     # Hard stop at 18 — above this is breach territory
             'IC_MAX_GAP':                150,      # Skip if |gap| > 150 pts (directional day)
             'IC_DOW_ALLOW':              [3],      # Thursday only (expiry day)
             # Strike selection (ATR-based, rounded to nearest 100)
-            'IC_CALL_ATR':               0.50,     # Short call: spot + 0.5×ATR14
+            'IC_CALL_ATR':               0.50,     # Short call: spot + 0.5×ATR14 (sweep winner)
             'IC_PUT_ATR':                0.50,     # Short put:  spot − 0.5×ATR14
             'IC_WING_WIDTH':             300,      # Wing spread in pts (defines max loss per leg)
-            # Exit rules
-            'IC_PROFIT_TARGET_PCT':      0.60,     # Exit at 60% of net credit collected
+            # Exit rules — profit target 70% is sweep winner (higher theta capture)
+            'IC_PROFIT_TARGET_PCT':      0.70,     # Exit at 70% of net credit collected
             'IC_STOP_LOSS_MULT':         2.0,      # Stop when net debit = 2× net credit received
             'IC_BREACH_BUFFER':          50,       # Exit if spot within 50 pts of short strike
             'IC_ENTRY_AFTER':            '09:30',  # Entry window start
@@ -176,6 +183,14 @@ STRATEGIES = {
             'IC_MARGIN_CAP_PCT':         0.60,     # Max 60% equity as margin (conservative)
             'IC_MIN_NET_CREDIT':         50,       # Skip if net credit < 50 pts (not worth the risk)
             'IC_CONSECUTIVE_LOSS_LIMIT': 2,        # Skip after 2 consecutive expiry losses
+            # Dynamic lot sizing by VIX regime + credit conviction
+            # Lots = base(VIX) + 1 if credit_ratio > IC_CREDIT_BONUS_THRESH
+            # Base: VIX<12 → 2 lots | VIX 12-15 → 1 lot | VIX 15-18 → 3 lots
+            'IC_LOT_VIX_LOW':            2,        # Base lots when VIX < 12
+            'IC_LOT_VIX_MIDLOW':         1,        # Base lots when VIX 12-15
+            'IC_LOT_VIX_MID':            3,        # Base lots when VIX 15-18 (sweet spot)
+            'IC_LOT_MAX':                4,        # Hard cap on lots
+            'IC_CREDIT_BONUS_THRESH':    0.35,     # net_credit/wing_width > 35% → +1 lot
         },
     },
 }

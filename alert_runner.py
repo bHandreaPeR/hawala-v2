@@ -54,7 +54,7 @@ from config import INSTRUMENTS, STRATEGIES
 from data.fetch import fetch_instrument
 from data.options_fetch import get_nearest_expiry, fetch_option_candles, lookup_option_price
 from alerts.telegram import send as tg
-from strategies.iron_condor import _bs_price as _ic_bs_price
+from strategies.iron_condor import _bs_price as _ic_bs_price, _conviction_lots as _ic_conviction_lots
 
 IST        = pytz.timezone('Asia/Kolkata')
 INSTRUMENT = 'BANKNIFTY'
@@ -672,10 +672,10 @@ def _fetch_ic_exit_premium(expiry, strike: int, opt_type: str,
 def _log_ic_trade(today: date, entry_ts, exit_ts, exit_reason: str,
                   call_short: int, put_short: int, call_long: int, put_long: int,
                   net_credit: float, net_debit: float, expiry, atr14: float,
-                  vix: float, gap_pts: float) -> None:
-    """Log the IC trade to live_trades.csv."""
+                  vix: float, gap_pts: float, conv_lots: int = 1) -> None:
+    """Log the IC trade to live_trades.csv (P&L scaled by conviction lots)."""
     pnl_pts = net_credit - net_debit
-    pnl_rs  = round(pnl_pts * LOT_SIZE - 40 * 4, 2)   # 4 legs × ₹40 brokerage
+    pnl_rs  = round(pnl_pts * LOT_SIZE * conv_lots - 40 * 4 * conv_lots, 2)
     _log_trade({
         'date':        today.isoformat(),
         'weekday':     _DAY_NAMES[today.weekday()],
@@ -690,7 +690,7 @@ def _log_ic_trade(today: date, entry_ts, exit_ts, exit_reason: str,
         'exit_reason': exit_reason,
         'pnl_pts':     round(pnl_pts, 2),
         'pnl_rs':      pnl_rs,
-        'lots':        1,
+        'lots':        conv_lots,
         'lot_size':    LOT_SIZE,
         'gap_pts':     round(gap_pts, 0),
         'atr14':       round(atr14, 0),
@@ -827,26 +827,49 @@ def run_iron_condor_live(gap_info: dict, hist: pd.DataFrame) -> None:
         print(f"  🚧 IC: net credit {net_credit:.0f} < {ic_p['IC_MIN_NET_CREDIT']} — skip.")
         return
 
+    # ── Conviction lot sizing ──────────────────────────────────────────────
+    conv_lots    = _ic_conviction_lots(vix_val, net_credit, ic_p['IC_WING_WIDTH'], ic_p)
+    credit_ratio = net_credit / max(ic_p['IC_WING_WIDTH'], 1)
+
+    if vix_val < 12.0:
+        vix_regime = 'LOW (<12)'
+    elif vix_val < 15.0:
+        vix_regime = 'MID-LOW (12-15)'
+    else:
+        vix_regime = 'MID (15-18)'
+
+    if credit_ratio > 0.40:
+        conviction_label = 'HIGH ✅ (credit bonus active)'
+    elif credit_ratio > 0.35:
+        conviction_label = 'MED-HIGH ✅ (credit bonus active)'
+    else:
+        conviction_label = 'MED'
+
     # ── Entry alert ────────────────────────────────────────────────────────
-    pnl_per_lot_max   = round(max_profit_pts * LOT_SIZE, 0)
-    loss_per_lot_max  = round(max_loss_pts   * LOT_SIZE, 0)
     target_debit      = net_credit * (1 - ic_p['IC_PROFIT_TARGET_PCT'])
+    pnl_total_max     = round(max_profit_pts * LOT_SIZE * conv_lots, 0)
+    loss_total_max    = round(max_loss_pts   * LOT_SIZE * conv_lots, 0)
+    margin_total      = round(max_loss_pts   * LOT_SIZE * conv_lots, 0)
     entry_msg = (
         f"🦅 <b>IRON CONDOR — Expiry Day</b>\n\n"
-        f"<b>BANKNIFTY</b>  |  Expiry: {expiry_str}  |  VIX: {vix_val:.1f}\n"
-        f"Spot: ₹{spot:.0f}  |  ATR14: {atr14:.0f}\n\n"
-        f"SELL {call_short} CE @ <b>{cs_prem:.0f}</b>  |  BUY {call_long} CE @ {cl_prem:.0f}\n"
-        f"SELL {put_short} PE @ <b>{ps_prem:.0f}</b>  |  BUY {put_long} PE @ {pl_prem:.0f}\n\n"
-        f"Net Credit: <b>{net_credit:.0f} pts</b>  (₹{net_credit*LOT_SIZE:,.0f}/lot)\n"
-        f"Max Profit: ₹{pnl_per_lot_max:,.0f}  |  Max Loss: ₹{loss_per_lot_max:,.0f}\n"
-        f"Break-even zone: {lower_be:.0f} – {upper_be:.0f}\n"
-        f"Target exit when debit ≤ {target_debit:.0f} pts ({ic_p['IC_PROFIT_TARGET_PCT']*100:.0f}% collected)\n"
+        f"<b>BANKNIFTY</b>  |  Expiry: {expiry_str}\n"
+        f"VIX: <b>{vix_val:.1f}</b>  [{vix_regime}]  |  ATR14: {atr14:.0f}\n"
+        f"Spot: ₹{spot:.0f}  |  Gap: {gap_pts:+.0f} pts\n\n"
+        f"SELL <b>{call_short} CE</b> @ {cs_prem:.0f}  |  BUY {call_long} CE @ {cl_prem:.0f}\n"
+        f"SELL <b>{put_short} PE</b> @ {ps_prem:.0f}  |  BUY {put_long} PE @ {pl_prem:.0f}\n\n"
+        f"Net Credit: <b>{net_credit:.0f} pts</b>  (credit/wing: {credit_ratio:.0%})\n"
+        f"Break-even: {lower_be:.0f} – {upper_be:.0f}\n\n"
+        f"🎯 <b>Conviction: {conviction_label}</b>\n"
+        f"Lot size: <b>{conv_lots} lots</b> × {LOT_SIZE} units\n"
+        f"Max Profit: ₹{pnl_total_max:,.0f}  |  Max Loss: ₹{loss_total_max:,.0f}\n"
+        f"Margin deployed: ~₹{margin_total:,.0f}\n\n"
+        f"Target: debit ≤ {target_debit:.0f} pts ({ic_p['IC_PROFIT_TARGET_PCT']*100:.0f}% collected)\n"
         f"Squareoff: {ic_p['IC_SQUAREOFF']} IST"
     )
     for chat_id in TG_CHAT_IDS:
         tg(TG_TOKEN, chat_id, entry_msg)
-    print(f"  📤  IC entry sent: net_credit={net_credit:.0f} pts  "
-          f"strikes {put_short}P/{call_short}C  wings ±{ic_p['IC_WING_WIDTH']}")
+    print(f"  📤  IC entry sent: net_credit={net_credit:.0f}  VIX={vix_val:.1f}  "
+          f"lots={conv_lots}  strikes {put_short}P/{call_short}C")
 
     # ── Monitoring loop ────────────────────────────────────────────────────
     profit_target_debit = net_credit * (1 - ic_p['IC_PROFIT_TARGET_PCT'])
@@ -919,7 +942,7 @@ def run_iron_condor_live(gap_info: dict, hist: pd.DataFrame) -> None:
 
     exit_ts  = now_ist()
     pnl_pts  = net_credit - net_debit_exit
-    pnl_rs   = round(pnl_pts * LOT_SIZE - 40 * 4, 2)
+    pnl_rs   = round(pnl_pts * LOT_SIZE * conv_lots - 40 * 4 * conv_lots, 2)
     icon     = '🎯' if pnl_rs > 0 else ('⏹' if exit_reason == 'SQUARE OFF' else '🛑')
     sign     = '+' if pnl_rs >= 0 else ''
     pct_coll = round((pnl_pts / net_credit * 100), 1) if net_credit else 0
@@ -927,16 +950,18 @@ def run_iron_condor_live(gap_info: dict, hist: pd.DataFrame) -> None:
     exit_msg = (
         f"{icon} <b>EXIT — Iron Condor ({exit_reason})</b>\n\n"
         f"Net debit to close: {net_debit_exit:.0f} pts\n"
-        f"P&L: {sign}₹{pnl_rs:,.0f}/lot  ({pct_coll:+.1f}% of max profit)\n"
+        f"P&L: {sign}₹{pnl_rs:,.0f}  ({pct_coll:+.1f}% of credit)  ×{conv_lots} lots\n"
+        f"Per lot: {sign}₹{round(pnl_pts*LOT_SIZE-40*4):,.0f}\n"
         f"Time: {exit_ts.strftime('%H:%M')} IST"
     )
     for chat_id in TG_CHAT_IDS:
         tg(TG_TOKEN, chat_id, exit_msg)
-    print(f"  📤  IC exit sent: {exit_reason}  pnl=₹{pnl_rs:,.0f}")
+    print(f"  📤  IC exit sent: {exit_reason}  lots={conv_lots}  pnl=₹{pnl_rs:,.0f}")
 
     _log_ic_trade(today, entry_ts, exit_ts, exit_reason,
                   call_short, put_short, call_long, put_long,
-                  net_credit, net_debit_exit, expiry_date, atr14, vix_val, gap_pts)
+                  net_credit, net_debit_exit, expiry_date, atr14, vix_val, gap_pts,
+                  conv_lots=conv_lots)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────

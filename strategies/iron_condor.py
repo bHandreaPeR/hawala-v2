@@ -120,6 +120,42 @@ def _get_vix_series() -> pd.Series | None:
         return None
 
 
+# ── Conviction lot sizing ─────────────────────────────────────────────────────
+
+def _conviction_lots(vix: float, net_credit: float, wing_width: int,
+                     p: dict) -> int:
+    """
+    Dynamic lot count based on VIX regime and credit-to-wing ratio.
+
+    VIX regime mapping (from 2021-2026 backtest):
+      < 12  (LOW):      WR=90.9%, small breaches  → 2 base lots
+      12-15 (MID-LOW):  WR=77.4%                  → 1 base lot
+      15-18 (MID):      WR=91.8%, sweet spot       → 3 base lots
+      18-22 (MID-HIGH): WR=42.9% — SKIP (71% breach exit rate)
+      > 22  (HIGH):     explosive                  → SKIP
+
+    Credit bonus: if net_credit/wing_width > IC_CREDIT_BONUS_THRESH, add 1 lot.
+    Hard cap: IC_LOT_MAX.
+    """
+    vix_max = float(p.get('IC_VIX_MAX', 18.0))
+    if vix > vix_max:
+        return 0   # regime filter already blocked — safety guard
+
+    if vix < 12.0:
+        base = int(p.get('IC_LOT_VIX_LOW',    2))
+    elif vix < 15.0:
+        base = int(p.get('IC_LOT_VIX_MIDLOW', 1))
+    else:
+        base = int(p.get('IC_LOT_VIX_MID',    3))
+
+    credit_ratio  = net_credit / max(wing_width, 1)
+    bonus_thresh  = float(p.get('IC_CREDIT_BONUS_THRESH', 0.35))
+    credit_bonus  = 1 if credit_ratio > bonus_thresh else 0
+    lot_max       = int(p.get('IC_LOT_MAX', 4))
+
+    return min(base + credit_bonus, lot_max)
+
+
 # ── Strike rounding ───────────────────────────────────────────────────────────
 
 def _round_strike(price: float, interval: int, direction: str = 'nearest') -> int:
@@ -201,13 +237,13 @@ def run_iron_condor(
     # ── Merge sweep overrides ────────────────────────────────────────────────
     p = {**strategy_params, **(params or {})}
 
-    IC_VIX_MIN     = float(p.get('IC_VIX_MIN',     15.0))
-    IC_VIX_MAX     = float(p.get('IC_VIX_MAX',     22.0))
+    IC_VIX_MIN     = float(p.get('IC_VIX_MIN',      0.0))
+    IC_VIX_MAX     = float(p.get('IC_VIX_MAX',     18.0))
     IC_MAX_GAP     = float(p.get('IC_MAX_GAP',     150.0))
     IC_CALL_ATR    = float(p.get('IC_CALL_ATR',     0.50))
     IC_PUT_ATR     = float(p.get('IC_PUT_ATR',      0.50))
     IC_WING_WIDTH  = int(  p.get('IC_WING_WIDTH',   300))
-    IC_PROFIT_PCT  = float(p.get('IC_PROFIT_TARGET_PCT', 0.60))
+    IC_PROFIT_PCT  = float(p.get('IC_PROFIT_TARGET_PCT', 0.70))
     IC_STOP_MULT   = float(p.get('IC_STOP_LOSS_MULT',    2.0))
     IC_BREACH_BUF  = float(p.get('IC_BREACH_BUFFER',     50.0))
     IC_ENTRY_AFTER = str(  p.get('IC_ENTRY_AFTER',  '09:30'))
@@ -432,13 +468,37 @@ def run_iron_condor(
             exit_ts   = entry_ts
             net_debit = 0.0   # all premium decayed; conservative for late entries
 
-        # ── P&L ──────────────────────────────────────────────────────────────
-        pnl_pts = net_credit - net_debit           # positive = profit
-        pnl_rs  = round(pnl_pts * lot_size - brokerage * 4, 2)
-        win     = 1 if pnl_rs > 0 else 0
+        # ── Conviction lot sizing ─────────────────────────────────────────────
+        conv_lots = _conviction_lots(vix_val, net_credit, IC_WING_WIDTH, p)
 
-        # Margin = max possible loss per lot (wing width - credit)
-        margin_per_lot = round(max_loss_pts * lot_size, 2)
+        # ── P&L (scaled by conviction lots) ──────────────────────────────────
+        pnl_pts    = net_credit - net_debit           # per-lot points
+        pnl_rs_1   = round(pnl_pts * lot_size - brokerage * 4, 2)   # 1-lot reference
+        pnl_rs     = round(pnl_pts * lot_size * conv_lots - brokerage * 4 * conv_lots, 2)
+        win        = 1 if pnl_rs > 0 else 0
+
+        # Margin = max possible loss × conviction lots
+        margin_per_lot  = round(max_loss_pts * lot_size, 2)          # per-lot margin
+        total_margin    = round(margin_per_lot * conv_lots, 2)
+
+        # Credit/wing ratio → conviction label
+        credit_ratio = net_credit / max(IC_WING_WIDTH, 1)
+        if credit_ratio > 0.40:
+            conviction_label = 'HIGH'
+        elif credit_ratio > 0.30:
+            conviction_label = 'MED'
+        else:
+            conviction_label = 'LOW'
+
+        # VIX regime label
+        if vix_val < 12.0:
+            vix_regime = 'LOW'
+        elif vix_val < 15.0:
+            vix_regime = 'MID-LOW'
+        elif vix_val < 18.0:
+            vix_regime = 'MID'
+        else:
+            vix_regime = 'ABOVE-THRESHOLD'
 
         # Expiry date for backtest (approximate: use last-Thursday-of-month logic)
         expiry_str = str(expiry_date) if groww is not None else _approx_expiry_str(today)
@@ -451,20 +511,23 @@ def run_iron_condor(
             'year':             today.year,
             'instrument':       instrument_sym,
             'strategy':         'IC',
-            'direction':        'NEUTRAL',     # short strangle = neutral
-            'entry':            round(net_credit, 2),    # net credit received
-            'exit_price':       round(net_debit,  2),    # net debit to close
+            'direction':        'NEUTRAL',           # short strangle = neutral
+            'entry':            round(net_credit, 2),    # net credit received (per lot)
+            'exit_price':       round(net_debit,  2),    # net debit to close (per lot)
             'stop':             round(net_credit * IC_STOP_MULT, 2),
             'target':           round(net_credit * (1 - IC_PROFIT_PCT), 2),
-            'pnl_pts':          round(pnl_pts, 2),
-            'pnl_rs':           pnl_rs,
+            'pnl_pts':          round(pnl_pts, 2),       # per-lot points
+            'pnl_rs':           pnl_rs,                  # scaled by conviction lots
+            'pnl_rs_1lot':      pnl_rs_1,                # 1-lot reference P&L
             'win':              win,
             'exit_reason':      exit_reason,
-            'bias_score':       round(min(net_credit / IC_WING_WIDTH, 1.0), 3),
-            'lots_used':        1,
-            'capital_used':     margin_per_lot,
+            'bias_score':       round(min(credit_ratio, 1.0), 3),
+            'lots_used':        conv_lots,               # conviction-sized lots
+            'conviction':       conviction_label,
+            'vix_regime':       vix_regime,
+            'capital_used':     total_margin,
             'macro_ok':         True,
-            'regime':           'neutral',
+            'regime':           vix_regime.lower(),
             # IC-specific schema
             'call_short_strike': call_short,
             'put_short_strike':  put_short,
@@ -485,9 +548,11 @@ def run_iron_condor(
             'dte':               0,
             'atr14':             round(atr14, 2),
             'vix_at_entry':      round(vix_val, 2),
+            'credit_ratio':      round(credit_ratio, 3),
             'gap_pts':           round(gap_pts, 2),
             'spot_at_entry':     round(spot, 2),
             'margin_per_lot':    margin_per_lot,
+            'total_margin':      total_margin,
             'per_trade_risk_pct': IC_MARGIN_CAP,
         })
 
