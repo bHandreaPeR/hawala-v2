@@ -183,14 +183,20 @@ STRATEGIES = {
             'IC_MARGIN_CAP_PCT':         0.60,     # Max 60% equity as margin (conservative)
             'IC_MIN_NET_CREDIT':         50,       # Skip if net credit < 50 pts (not worth the risk)
             'IC_CONSECUTIVE_LOSS_LIMIT': 2,        # Skip after 2 consecutive expiry losses
-            # Dynamic lot sizing by VIX regime + credit conviction
-            # Lots = base(VIX) + 1 if credit_ratio > IC_CREDIT_BONUS_THRESH
-            # Base: VIX<12 → 2 lots | VIX 12-15 → 1 lot | VIX 15-18 → 3 lots
-            'IC_LOT_VIX_LOW':            2,        # Base lots when VIX < 12
-            'IC_LOT_VIX_MIDLOW':         1,        # Base lots when VIX 12-15
-            'IC_LOT_VIX_MID':            3,        # Base lots when VIX 15-18 (sweet spot)
-            'IC_LOT_MAX':                4,        # Hard cap on lots
-            'IC_CREDIT_BONUS_THRESH':    0.35,     # net_credit/wing_width > 35% → +1 lot
+            # Capital-aware lot sizing: lots = floor(equity × risk_pct × vix_scalar / margin_per_lot)
+            # VIX scalar reduces size in lower-conviction regimes:
+            #   LOW (<12)    : 0.50× (stable but less premium — no need to oversize)
+            #   MID-LOW(12-15): 0.70× (decent WR, moderate premium)
+            #   MID (15-18)  : 1.00× (sweet spot — full deployment)
+            # At ₹9L with 5% risk and ~₹4,200 margin/lot: ~10-16 lots depending on regime
+            'IC_RISK_PER_TRADE_PCT':     0.05,     # 5% of equity per trade (max loss bound)
+            'IC_VIX_SCALAR_LOW':         0.50,     # Scale factor when VIX < 12
+            'IC_VIX_SCALAR_MIDLOW':      0.70,     # Scale factor when VIX 12-15
+            'IC_VIX_SCALAR_MID':         1.00,     # Scale factor when VIX 15-18 (full size)
+            'IC_LOT_MAX':                50,       # Hard cap (liquidity ceiling ~20 lots in practice)
+            'IC_LOT_MIN':                1,        # Always trade at least 1 lot
+            # Legacy fixed-lot params (unused when IC_RISK_PER_TRADE_PCT is set)
+            'IC_CREDIT_BONUS_THRESH':    0.35,     # kept for sweep compatibility
         },
     },
 }

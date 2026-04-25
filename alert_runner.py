@@ -827,8 +827,21 @@ def run_iron_condor_live(gap_info: dict, hist: pd.DataFrame) -> None:
         print(f"  🚧 IC: net credit {net_credit:.0f} < {ic_p['IC_MIN_NET_CREDIT']} — skip.")
         return
 
-    # ── Conviction lot sizing ──────────────────────────────────────────────
-    conv_lots    = _ic_conviction_lots(vix_val, net_credit, ic_p['IC_WING_WIDTH'], ic_p)
+    # ── Conviction lot sizing (capital-aware) ─────────────────────────────
+    # Read live equity from trade log (last equity_after, or fallback to env var)
+    live_equity = 0.0
+    try:
+        if log_path.exists():
+            _eq_df = pd.read_csv(log_path)
+            if 'equity_after' in _eq_df.columns and not _eq_df['equity_after'].dropna().empty:
+                live_equity = float(_eq_df['equity_after'].dropna().iloc[-1])
+    except Exception:
+        pass
+    if live_equity <= 0:
+        live_equity = float(os.getenv('IC_LIVE_EQUITY', '900000'))
+
+    conv_lots    = _ic_conviction_lots(vix_val, net_credit, ic_p['IC_WING_WIDTH'], ic_p,
+                                       equity=live_equity, lot_size=LOT_SIZE)
     credit_ratio = net_credit / max(ic_p['IC_WING_WIDTH'], 1)
 
     if vix_val < 12.0:

@@ -123,37 +123,52 @@ def _get_vix_series() -> pd.Series | None:
 # ── Conviction lot sizing ─────────────────────────────────────────────────────
 
 def _conviction_lots(vix: float, net_credit: float, wing_width: int,
-                     p: dict) -> int:
+                     p: dict, equity: float = 0.0,
+                     lot_size: int = 30) -> int:
     """
-    Dynamic lot count based on VIX regime and credit-to-wing ratio.
+    Capital-aware lot sizing: lots = floor(equity × risk_pct × vix_scalar / margin_per_lot)
 
-    VIX regime mapping (from 2021-2026 backtest):
-      < 12  (LOW):      WR=90.9%, small breaches  → 2 base lots
-      12-15 (MID-LOW):  WR=77.4%                  → 1 base lot
-      15-18 (MID):      WR=91.8%, sweet spot       → 3 base lots
-      18-22 (MID-HIGH): WR=42.9% — SKIP (71% breach exit rate)
-      > 22  (HIGH):     explosive                  → SKIP
+    VIX scalars (from 2021-2026 regime analysis):
+      LOW (<12)    : 0.50× — stable market, lower premium → half deployment
+      MID-LOW(12-15): 0.70× — decent WR, moderate size
+      MID (15-18)  : 1.00× — sweet spot, full deployment
 
-    Credit bonus: if net_credit/wing_width > IC_CREDIT_BONUS_THRESH, add 1 lot.
-    Hard cap: IC_LOT_MAX.
+    Falls back to fixed legacy lots if equity not provided (sweep mode).
     """
     vix_max = float(p.get('IC_VIX_MAX', 18.0))
     if vix > vix_max:
-        return 0   # regime filter already blocked — safety guard
+        return 0   # blocked by VIX filter
 
+    # VIX scalar
     if vix < 12.0:
-        base = int(p.get('IC_LOT_VIX_LOW',    2))
+        scalar = float(p.get('IC_VIX_SCALAR_LOW',    0.50))
     elif vix < 15.0:
-        base = int(p.get('IC_LOT_VIX_MIDLOW', 1))
+        scalar = float(p.get('IC_VIX_SCALAR_MIDLOW', 0.70))
     else:
-        base = int(p.get('IC_LOT_VIX_MID',    3))
+        scalar = float(p.get('IC_VIX_SCALAR_MID',    1.00))
 
-    credit_ratio  = net_credit / max(wing_width, 1)
-    bonus_thresh  = float(p.get('IC_CREDIT_BONUS_THRESH', 0.35))
-    credit_bonus  = 1 if credit_ratio > bonus_thresh else 0
-    lot_max       = int(p.get('IC_LOT_MAX', 4))
+    lot_max = int(p.get('IC_LOT_MAX', 50))
+    lot_min = int(p.get('IC_LOT_MIN',  1))
 
-    return min(base + credit_bonus, lot_max)
+    if equity > 0:
+        # Capital-aware: size by risk budget
+        risk_pct      = float(p.get('IC_RISK_PER_TRADE_PCT', 0.05))
+        max_loss_pts  = wing_width - net_credit
+        margin_1lot   = max(max_loss_pts * lot_size, 1)
+        raw           = (equity * risk_pct * scalar) / margin_1lot
+        return max(lot_min, min(int(raw), lot_max))
+    else:
+        # Fallback for backtest sweep mode (no equity tracking):
+        # use simplified fixed-tier sizing
+        if vix < 12.0:
+            base = 2
+        elif vix < 15.0:
+            base = 1
+        else:
+            base = 3
+        credit_ratio = net_credit / max(wing_width, 1)
+        bonus = 1 if credit_ratio > float(p.get('IC_CREDIT_BONUS_THRESH', 0.35)) else 0
+        return max(lot_min, min(base + bonus, lot_max))
 
 
 # ── Strike rounding ───────────────────────────────────────────────────────────
@@ -468,8 +483,10 @@ def run_iron_condor(
             exit_ts   = entry_ts
             net_debit = 0.0   # all premium decayed; conservative for late entries
 
-        # ── Conviction lot sizing ─────────────────────────────────────────────
-        conv_lots = _conviction_lots(vix_val, net_credit, IC_WING_WIDTH, p)
+        # ── Conviction lot sizing (capital-aware if equity provided via params) ─
+        equity_now = float(p.get('_equity', 0.0))   # injected by compounding engine
+        conv_lots  = _conviction_lots(vix_val, net_credit, IC_WING_WIDTH, p,
+                                      equity=equity_now, lot_size=lot_size)
 
         # ── P&L (scaled by conviction lots) ──────────────────────────────────
         pnl_pts    = net_credit - net_debit           # per-lot points
