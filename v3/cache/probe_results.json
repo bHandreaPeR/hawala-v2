@@ -1,0 +1,247 @@
+[
+  {
+    "date": "2025-12-10",
+    "expiry": "2025-12-30",
+    "fut_symbol": "NSE-BANKNIFTY-30Dec25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-30Dec25-54000-CE",
+    "fut_candles": 11,
+    "opt_candles": 1,
+    "fut_ok": true,
+    "opt_ok": true,
+    "opt_strike": 54000
+  },
+  {
+    "date": "2025-11-10",
+    "expiry": "2025-11-25",
+    "fut_symbol": "NSE-BANKNIFTY-25Nov25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-25Nov25-51500-CE",
+    "fut_candles": 11,
+    "opt_candles": 3,
+    "fut_ok": true,
+    "opt_ok": true,
+    "opt_strike": 51500
+  },
+  {
+    "date": "2025-10-10",
+    "expiry": "2025-10-28",
+    "fut_symbol": "NSE-BANKNIFTY-28Oct25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-28Oct25-53500-CE",
+    "fut_candles": 11,
+    "opt_candles": 1,
+    "fut_ok": true,
+    "opt_ok": true,
+    "opt_strike": 53500
+  },
+  {
+    "date": "2025-09-10",
+    "expiry": "2025-09-30",
+    "fut_symbol": "NSE-BANKNIFTY-30Sep25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-30Sep25-53500-CE",
+    "fut_candles": 11,
+    "opt_candles": 10,
+    "fut_ok": true,
+    "opt_ok": true,
+    "opt_strike": 53500
+  },
+  {
+    "date": "2025-08-11",
+    "expiry": "2025-08-26",
+    "fut_symbol": "NSE-BANKNIFTY-26Aug25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-26Aug25-51500-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2025-07-10",
+    "expiry": "2025-07-29",
+    "fut_symbol": "NSE-BANKNIFTY-29Jul25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-29Jul25-53000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2025-06-10",
+    "expiry": "2025-06-24",
+    "fut_symbol": "NSE-BANKNIFTY-24Jun25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-24Jun25-54500-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2025-05-12",
+    "expiry": "2025-05-27",
+    "fut_symbol": "NSE-BANKNIFTY-27May25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-27May25-54500-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2025-04-10",
+    "expiry": "2025-04-29",
+    "fut_symbol": "NSE-BANKNIFTY-29Apr25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-29Apr25-51000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2025-03-10",
+    "expiry": "2025-03-25",
+    "fut_symbol": "NSE-BANKNIFTY-25Mar25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-25Mar25-49000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2025-02-10",
+    "expiry": "2025-02-25",
+    "fut_symbol": "NSE-BANKNIFTY-25Feb25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-25Feb25-48000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2025-01-10",
+    "expiry": "2025-01-28",
+    "fut_symbol": "NSE-BANKNIFTY-28Jan25-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-28Jan25-49000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-12-10",
+    "expiry": "2024-12-31",
+    "fut_symbol": "NSE-BANKNIFTY-31Dec24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-31Dec24-53500-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-11-11",
+    "expiry": "2024-11-26",
+    "fut_symbol": "NSE-BANKNIFTY-26Nov24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-26Nov24-52500-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-10-10",
+    "expiry": "2024-10-29",
+    "fut_symbol": "NSE-BANKNIFTY-29Oct24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-29Oct24-52000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-09-10",
+    "expiry": "2024-09-24",
+    "fut_symbol": "NSE-BANKNIFTY-24Sep24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-24Sep24-53500-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-08-12",
+    "expiry": "2024-08-27",
+    "fut_symbol": "NSE-BANKNIFTY-27Aug24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-27Aug24-50000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-07-10",
+    "expiry": "2024-07-30",
+    "fut_symbol": "NSE-BANKNIFTY-30Jul24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-30Jul24-51000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-06-10",
+    "expiry": "2024-06-25",
+    "fut_symbol": "NSE-BANKNIFTY-25Jun24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-25Jun24-49000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-05-10",
+    "expiry": "2024-05-28",
+    "fut_symbol": "NSE-BANKNIFTY-28May24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-28May24-48500-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-04-10",
+    "expiry": "2024-04-30",
+    "fut_symbol": "NSE-BANKNIFTY-30Apr24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-30Apr24-48500-CE",
+    "fut_candles": 0,
+    "opt_candles": 11,
+    "fut_ok": false,
+    "opt_ok": true,
+    "opt_strike": 48500
+  },
+  {
+    "date": "2024-03-11",
+    "expiry": "2024-03-26",
+    "fut_symbol": "NSE-BANKNIFTY-26Mar24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-26Mar24-47000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-02-12",
+    "expiry": "2024-02-27",
+    "fut_symbol": "NSE-BANKNIFTY-27Feb24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-27Feb24-46000-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  },
+  {
+    "date": "2024-01-10",
+    "expiry": "2024-01-30",
+    "fut_symbol": "NSE-BANKNIFTY-30Jan24-FUT",
+    "opt_symbol": "NSE-BANKNIFTY-30Jan24-48500-CE",
+    "fut_candles": 0,
+    "opt_candles": 0,
+    "fut_ok": false,
+    "opt_ok": false
+  }
+]

@@ -23,3 +23,27 @@ __pycache__/
 .idea/
 .vscode/
 *.swp
+
+# ── Secrets ─────────────────────────────────────────────────────
+token.env
+token.env.rtf
+
+# ── Cache / binary data (too large for git) ──────────────────────
+v3/cache/*.pkl
+*.pkl
+
+# ── Live runner logs ────────────────────────────────────────────
+v3/live/runner.log
+v3/live/runner_banknifty.log
+*.log
+
+# ── NSE data files ──────────────────────────────────────────────
+*.spn
+nsccl.*
+*.zip
+
+# ── Notebooks / scratch ─────────────────────────────────────────
+*.ipynb
+anaconda_projects/
+combineoi_*/
+-f
