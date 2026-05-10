@@ -35,13 +35,17 @@ RATE_SLEEP = 0.35        # seconds between API calls
 
 # ── Expiry resolution ─────────────────────────────────────────────────────────
 def get_nearest_expiry(groww, underlying: str, trade_date,
-                        min_days: int = 1):
+                        min_days: int = 1, exchange: str = 'NSE'):
     """
     Return the nearest expiry date (datetime.date) such that
     expiry >= trade_date + min_days.
 
     Looks in the current month and up to 2 months ahead.
     Returns None if nothing found.
+
+    Parameters
+    ----------
+    exchange : 'NSE' (default) or 'BSE' — for BSE instruments like SENSEX.
     """
     d = pd.Timestamp(trade_date).date()
 
@@ -51,7 +55,7 @@ def get_nearest_expiry(groww, underlying: str, trade_date,
         if m > 12:
             m -= 12
             y += 1
-        expiries = _fetch_expiries_for_month(groww, underlying, y, m)
+        expiries = _fetch_expiries_for_month(groww, underlying, y, m, exchange=exchange)
         time.sleep(RATE_SLEEP)
 
         cutoff = d + timedelta(days=min_days)
@@ -69,27 +73,35 @@ def fetch_option_candles(groww,
                           strike: int,
                           opt_type: str,
                           start_date: str,
-                          end_date: str) -> pd.DataFrame:
+                          end_date: str,
+                          exchange: str = 'NSE') -> pd.DataFrame:
     """
     Fetch 15-min OHLCV + OI for one option contract.
 
     Args
     ----
     groww       : Authenticated GrowwAPI instance
-    underlying  : 'BANKNIFTY' or 'NIFTY'
+    underlying  : 'BANKNIFTY', 'NIFTY', or 'SENSEX'
     expiry_date : datetime.date or 'YYYY-MM-DD' string
     strike      : integer strike price
     opt_type    : 'CE' or 'PE'
     start_date  : 'YYYY-MM-DD'
     end_date    : 'YYYY-MM-DD'
+    exchange    : 'NSE' (default) or 'BSE' for SENSEX
 
     Returns
     -------
     pd.DataFrame with columns [Open, High, Low, Close, Volume, Oi]
     indexed by tz-naive IST datetime. Empty DataFrame on failure.
     """
+    # Resolve exchange constant from the groww object
+    if exchange == 'BSE':
+        exch_const = getattr(groww, 'EXCHANGE_BSE', 'BSE')
+    else:
+        exch_const = getattr(groww, 'EXCHANGE_NSE', EXCHANGE)
+
     exp_d  = pd.Timestamp(expiry_date).date()
-    symbol = build_options_symbol(EXCHANGE, underlying, exp_d, strike, opt_type)
+    symbol = build_options_symbol(exchange, underlying, exp_d, strike, opt_type)
 
     start_ts = pd.Timestamp(start_date)
     end_ts   = pd.Timestamp(end_date + ' 23:59:59')
@@ -103,7 +115,7 @@ def fetch_option_candles(groww,
 
         try:
             resp    = groww.get_historical_candles(
-                exchange        = EXCHANGE,
+                exchange        = exch_const,
                 segment         = groww.SEGMENT_FNO,
                 groww_symbol    = symbol,
                 start_time      = s_str,
@@ -120,7 +132,7 @@ def fetch_option_candles(groww,
                 time.sleep(5)
                 try:
                     resp    = groww.get_historical_candles(
-                        exchange        = EXCHANGE,
+                        exchange        = exch_const,
                         segment         = groww.SEGMENT_FNO,
                         groww_symbol    = symbol,
                         start_time      = s_str,

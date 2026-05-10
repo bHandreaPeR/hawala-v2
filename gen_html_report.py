@@ -705,6 +705,149 @@ def _news_section(data):
   </div>"""
 
 
+def _data_freshness_section(data):
+    """
+    Reads each v3 signal-input cache directly from disk and reports the last
+    available date versus the expected lag-1 trading day.
+
+    Colour coding:
+      green  = fresh (last expected trading day)
+      yellow = 1–2 calendar days behind expected
+      red    = 3+ days behind, or file missing
+    """
+    import pickle, pathlib, datetime as _dt, pandas as _pd
+
+    ROOT = pathlib.Path(__file__).parent
+
+    today_str = data.get("date_iso", _dt.date.today().isoformat())
+    try:
+        today = _dt.date.fromisoformat(today_str)
+    except ValueError:
+        today = _dt.date.today()
+
+    # Last expected trading day before today (weekday only — no NSE holiday table)
+    expected = today - _dt.timedelta(days=1)
+    while expected.weekday() >= 5:
+        expected -= _dt.timedelta(days=1)
+
+    def _status(last_str):
+        """Return (css_class, icon, date_label) tuple."""
+        if last_str is None:
+            return "red", "✕", "MISSING"
+        try:
+            last = _dt.date.fromisoformat(str(last_str)[:10])
+        except ValueError:
+            return "red", "✕", "PARSE ERROR"
+        delta = (expected - last).days
+        if delta <= 0:
+            return "green", "✓", str(last)
+        if delta <= 2:
+            return "yellow", "⚠", f"{last}  (+{delta}d)"
+        return "red", "✕", f"{last}  (+{delta}d)"
+
+    def _last_dict(path):
+        """Max key < today from a pickle whose keys are date strings."""
+        if not path.exists():
+            return None
+        try:
+            with open(path, "rb") as fh:
+                d = pickle.load(fh)
+            prev = [k for k in d.keys() if str(k) < today_str]
+            return max(prev) if prev else None
+        except Exception:
+            return None
+
+    def _last_df_pickle(path, date_col="date"):
+        """Max date column < today from a pickled DataFrame."""
+        if not path.exists():
+            return None
+        try:
+            with open(path, "rb") as fh:
+                df = pickle.load(fh)
+            sub = df[df[date_col].astype(str) < today_str]
+            return str(sub[date_col].max()) if not sub.empty else None
+        except Exception:
+            return None
+
+    # FII cash (CSV)
+    fii_cash_last = None
+    try:
+        p = ROOT / "fii_data.csv"
+        if p.exists():
+            cf = _pd.read_csv(p)
+            cf["date"] = _pd.to_datetime(cf["date"]).dt.date
+            prev = cf[cf["date"] < today]
+            fii_cash_last = str(prev["date"].max()) if not prev.empty else None
+    except Exception:
+        pass
+
+    entries = [
+        ("FII Cash",              fii_cash_last,
+         "fii_data.csv",                           "FII Signature"),
+        ("FII F&amp;O",          _last_dict(ROOT / "trade_logs/_fii_fo_cache.pkl"),
+         "_fii_fo_cache.pkl",                      "FII Signature"),
+        ("PCR / Bhavcopy (N)",   _last_dict(ROOT / "v3/cache/bhavcopy_NIFTY_all.pkl"),
+         "bhavcopy_NIFTY_all.pkl",                 "PCR · Strike Defense"),
+        ("PCR / Bhavcopy (BN)",  _last_dict(ROOT / "v3/cache/bhavcopy_BN_all.pkl"),
+         "bhavcopy_BN_all.pkl",                    "PCR · Strike Defense"),
+        ("Candles 1m — NIFTY",   _last_df_pickle(ROOT / "v3/cache/candles_1m_NIFTY.pkl"),
+         "candles_1m_NIFTY.pkl",                   "OI Quadrant · Basis"),
+        ("Candles 1m — BANKNIFTY", _last_df_pickle(ROOT / "v3/cache/candles_1m_BANKNIFTY.pkl"),
+         "candles_1m_BANKNIFTY.pkl",               "OI Quadrant · Basis"),
+        ("Option OI — NIFTY",    _last_dict(ROOT / "v3/cache/option_oi_1m_NIFTY.pkl"),
+         "option_oi_1m_NIFTY.pkl",                 "OI Velocity · Strike Defense"),
+        ("Option OI — BANKNIFTY", _last_dict(ROOT / "v3/cache/option_oi_1m_BANKNIFTY.pkl"),
+         "option_oi_1m_BANKNIFTY.pkl",             "OI Velocity · Strike Defense"),
+    ]
+
+    rows_html = ""
+    for label, last, filename, signals in entries:
+        css, icon, date_lbl = _status(last)
+        rows_html += f"""
+          <tr>
+            <td><strong>{label}</strong></td>
+            <td style="font-family:monospace;font-size:10px;color:var(--text-muted);">{filename}</td>
+            <td style="font-size:10px;color:var(--text-muted);">{signals}</td>
+            <td class="{css}" style="font-weight:700;text-align:center;">{icon}</td>
+            <td class="{css}" style="font-weight:600;">{date_lbl}</td>
+          </tr>"""
+
+    all_fresh = all(_status(last)[0] == "green" for _, last, _, _ in entries)
+    any_missing = any(_status(last)[0] == "red" for _, last, _, _ in entries)
+
+    if all_fresh:
+        summary_cls = "success"
+        summary_txt = f"All caches up to date &mdash; expected lag-1: <strong>{expected}</strong>"
+    elif any_missing:
+        summary_cls = ""  # red alert-box
+        summary_txt = f"One or more caches are stale or missing. Expected lag-1: <strong>{expected}</strong>"
+    else:
+        summary_cls = "warning"
+        summary_txt = f"Some caches are slightly behind. Expected lag-1: <strong>{expected}</strong>"
+
+    return f"""
+  <div class="section-title">v3 Signal Data Freshness</div>
+  <div class="alert-box {summary_cls}" style="margin-bottom:12px;">
+    <div class="alert-title">{'✅ All Fresh' if all_fresh else ('⚠ Partial Staleness' if not any_missing else '❌ Stale / Missing Data')}</div>
+    <div class="alert-body">{summary_txt}</div>
+  </div>
+  <div class="card" style="margin-bottom:24px;">
+    <table>
+      <thead>
+        <tr>
+          <th>Cache</th>
+          <th>File</th>
+          <th>Signals Using This</th>
+          <th style="text-align:center;">Status</th>
+          <th>Last Available Date</th>
+        </tr>
+      </thead>
+      <tbody>{rows_html}
+      </tbody>
+    </table>
+  </div>"""
+
+
 def _events_calendar(data):
     events = data.get("events_calendar",[])
     if not events:
@@ -1061,6 +1204,8 @@ def build_html(data: dict) -> str:
 {_news_section(data)}
 
 {_events_calendar(data)}
+
+{_data_freshness_section(data)}
 
 </div>
 

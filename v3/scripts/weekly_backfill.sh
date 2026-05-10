@@ -44,9 +44,11 @@ echo "============================================================"
 
 cd "$PROJECT_ROOT"
 
+PYTHON=/opt/anaconda3/bin/python3
+
 echo ""
 echo "▶  Backfilling expired futures contracts (NIFTY + BANKNIFTY)"
-if python3 v3/data/backfill_expired_contracts.py --instrument ALL $DRY_RUN; then
+if $PYTHON v3/data/backfill_expired_contracts.py --instrument ALL $DRY_RUN; then
     echo "   ✓  Backfill complete"
 else
     echo "   ✗  Backfill FAILED (exit code $?)"
@@ -55,7 +57,7 @@ fi
 
 echo ""
 echo "▶  OI coverage check after backfill"
-python3 - <<'PYEOF'
+$PYTHON - <<'PYEOF'
 import pickle, pathlib, datetime
 
 ROOT = pathlib.Path('.').resolve()

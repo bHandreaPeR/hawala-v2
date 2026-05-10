@@ -35,33 +35,88 @@ def _load_env():
 
 def main():
     env = _load_env()
-    tg_token   = env.get("TELEGRAM_BOT_TOKEN", "")
-    TG_CHAT_IDS = env.get('TELEGRAM_CHAT_IDS', '').split(',')
+    # Newsletter goes to the MACRO bot (briefs only). The TRADE bot is
+    # reserved for entries/exits/P&L messages.
+    tg_token   = env.get("TELEGRAM_BOT_TOKEN_MACRO", "")
+    TG_CHAT_IDS = env.get('TELEGRAM_CHAT_IDS_MACRO', '').split(',')
     TG_CHAT_IDS = [cid.strip() for cid in TG_CHAT_IDS if cid.strip()]
 
-    if not tg_token or not TG_CHAT_IDS[0]:
-        print("⚠  Telegram credentials not set in token.env — PDF will be generated but NOT sent")
+    if not tg_token or (TG_CHAT_IDS and not TG_CHAT_IDS[0]):
+        print("⚠  TELEGRAM_BOT_TOKEN_MACRO / TELEGRAM_CHAT_IDS_MACRO not set "
+              "in token.env — PDF will be generated but NOT sent")
+
+    # ── Step 0: Refresh all v3 data caches before fetching report data ────
+    # Runs morning_fetch.sh (FII F&O + FII cash) and daily_fetch.sh
+    # (candles, option OI, bhavcopy/PCR). Both are safe to run at 7:30 AM —
+    # they fetch the previous trading day's data published by NSE overnight.
+    import subprocess
+    _project_root = pathlib.Path(__file__).parent
+
+    def _run_shell(label: str, script_path: pathlib.Path) -> None:
+        print(f"\n{'─'*55}")
+        print(f"  {label}")
+        print(f"{'─'*55}")
+        if not script_path.exists():
+            print(f"  ⚠  {script_path} not found — skipping")
+            return
+        try:
+            result = subprocess.run(
+                ["bash", str(script_path)],
+                cwd=str(_project_root),
+                capture_output=False,   # print live to stdout
+                timeout=300,            # 5 min hard limit per script
+            )
+            if result.returncode != 0:
+                print(f"  ⚠  {label} exited with code {result.returncode} — continuing")
+        except subprocess.TimeoutExpired:
+            print(f"  ⚠  {label} timed out after 5 min — continuing")
+        except Exception as e:
+            print(f"  ⚠  {label} error: {e} — continuing")
+
+    _run_shell("morning_fetch.sh  (FII F&O + FII cash)",
+               _project_root / "v3" / "scripts" / "morning_fetch.sh")
+    _run_shell("daily_fetch.sh  (candles + option OI + bhavcopy/PCR)",
+               _project_root / "v3" / "scripts" / "daily_fetch.sh")
+
+    print(f"\n{'─'*55}")
+    print("  All caches refreshed — starting report fetch")
+    print(f"{'─'*55}\n")
 
     # ── Step 1: Fetch all data ────────────────────────────────────────────
     from data.fetch_report_data import fetch_all
     data = fetch_all()
 
     # ── Step 2: Save JSON signal file ────────────────────────────────────
-    logs_dir = pathlib.Path(__file__).parent / "trade_logs"
-    logs_dir.mkdir(exist_ok=True)
+    signals_dir = pathlib.Path(__file__).parent / "data_dumps" / "signals"
+    signals_dir.mkdir(parents=True, exist_ok=True)
     date_iso  = data.get("date_iso", datetime.date.today().isoformat())
-    json_path = logs_dir / f"market_signal_{date_iso}.json"
+    json_path = signals_dir / f"market_signal_{date_iso}.json"
     json_path.write_text(json.dumps(data, indent=2, default=str))
     print(f"  ✅ JSON saved → {json_path}")
 
     # ── Step 3: Build HTML (source of truth) ─────────────────────────────
     from gen_html_report import build_html
-    html_path = pathlib.Path(__file__).parent / f"market_report_{date_iso}.html"
+    html_dir = pathlib.Path(__file__).parent / "data_dumps" / "newsletters_archive"
+    html_dir.mkdir(parents=True, exist_ok=True)
+    html_path = html_dir / f"market_report_{date_iso}.html"
     html_path.write_text(build_html(data))
     print(f"  ✅ HTML saved → {html_path}")
 
     # ── Step 3b: Convert HTML → PDF for Telegram ─────────────────────────
-    pdf_path = pathlib.Path(__file__).parent / f"market_report_{date_iso}.pdf"
+    # Build a friendly newsletter filename: "Newsletter_13th May 26.pdf"
+    _today = datetime.date.fromisoformat(date_iso) if date_iso else datetime.date.today()
+    _day = _today.day
+    if 10 <= _day % 100 <= 20:
+        _suffix = 'th'
+    else:
+        _suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(_day % 10, 'th')
+    _newsletter_name = (
+        f"Newsletter {_day}{_suffix} {_today.strftime('%B')} "
+        f"{_today.strftime('%y')}.pdf"
+    )
+    newsletter_dir = pathlib.Path(__file__).parent / "data_dumps" / "newsletters"
+    newsletter_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = newsletter_dir / _newsletter_name
     _converted = False
 
     # 1. Headless Chrome (best fidelity — matches HTML exactly)
@@ -121,60 +176,21 @@ def main():
         build_pdf(data, str(pdf_path))
         print(f"  ℹ️  PDF (reportlab fallback) → {pdf_path}")
 
-    # ── Step 4: Send Telegram ─────────────────────────────────────────────
-    if not (tg_token and TG_CHAT_IDS[0]):
-        print("⚠  Telegram not configured — skipping send")
+    # ── Step 4: Send Newsletter PDF to MACRO channel (no summary message) ──
+    if not (tg_token and TG_CHAT_IDS and TG_CHAT_IDS[0]):
+        print("⚠  MACRO Telegram not configured — skipping send")
         return
 
-    from alerts.telegram import send, send_document
+    from alerts.telegram import send_document
 
-    sig    = data.get("hawala_signal", {})
-    bn     = data.get("banknifty_analysis", {})
-    overall = sig.get("overall", "—")
-    gap_pts = bn.get("gap_pts", "—")
-    vix     = data.get("india_vix", {}).get("price", "—")
-    sp_chg  = sig.get("sp_chg", "—")
-    fii_net = sig.get("fii_net", "—")
-    date_str = data.get("date_str", date_iso)
-    gen_at   = data.get("generated_at", "—")
-
-    def _fmt_pct(v):
-        try:
-            f = float(str(v).replace("%","").replace("+",""))
-            return f"+{f:.2f}%" if f >= 0 else f"{f:.2f}%"
-        except:
-            return str(v)
-
-    def _sign(v):
-        try:
-            return "+" if float(str(v).replace("%","").replace("+","")) >= 0 else ""
-        except:
-            return ""
-
-    gap_str = f"{_sign(gap_pts)}{float(gap_pts):,.0f} pts" if gap_pts not in ("—", None) else "—"
-    fii_str = f"₹{float(fii_net):,.0f} Cr" if fii_net not in ("—", None) else "pending"
-
-    signal_emoji = "🔴" if overall == "NO TRADE" else "🟢"
-    summary = (
-        f"📊 <b>HAWALA v2 — {date_str}</b>  |  {gen_at}\n\n"
-        f"<b>BankNifty:</b> {bn.get('prev_close','—'):,.0f}  |  Gap est: <b>{gap_str}</b>\n"
-        f"<b>Signal:</b> {signal_emoji} <b>{overall}</b>\n"
-        f"<i>{sig.get('reason','')}</i>\n\n"
-        f"VIX: {vix}  |  S&amp;P: {_fmt_pct(sp_chg)}  |  FII: {fii_str}\n\n"
-        f"Full report ↓"
-    )
-
-    print("\n📤 Sending Telegram summary...")
-    for chat_id in TG_CHAT_IDS:
-        send(tg_token, chat_id, summary)
-
-    print("📤 Sending PDF...")
+    print(f"\n📤 Sending Newsletter PDF → MACRO channel "
+          f"({len(TG_CHAT_IDS)} chat ids)...")
     for chat_id in TG_CHAT_IDS:
         send_document(
             tg_token,
             chat_id,
             str(pdf_path),
-            caption=f"Hawala v2 Pre-Market Report — {date_str}",
+            caption="",   # no caption — PDF only
         )
 
     print("\n✅  Done.")

@@ -54,22 +54,33 @@ _EXPIRY_CACHE: dict = {}   # module-level cache: (symbol, year, month) → [date
 
 def _fetch_expiries_for_month(groww, underlying_symbol: str,
                                year: int, month: int,
-                               max_retries: int = 4) -> list:
+                               max_retries: int = 4,
+                               exchange: str = 'NSE') -> list:
     """
     Call get_expiries() for one year-month and return sorted list of date objects.
     Results are cached so the same month is never fetched twice in a session.
     Retries with exponential backoff on rate-limit errors.
     Returns [] on persistent error.
+
+    Parameters
+    ----------
+    exchange : 'NSE' (default) or 'BSE' — for BSE instruments like SENSEX.
     """
-    cache_key = (underlying_symbol, year, month)
+    cache_key = (underlying_symbol, year, month, exchange)
     if cache_key in _EXPIRY_CACHE:
         return _EXPIRY_CACHE[cache_key]
+
+    # Resolve exchange constant from groww object
+    if exchange == 'BSE':
+        exch_const = getattr(groww, 'EXCHANGE_BSE', 'BSE')
+    else:
+        exch_const = getattr(groww, 'EXCHANGE_NSE', 'NSE')
 
     delay = 1.0
     for attempt in range(max_retries):
         try:
             resp = groww.get_expiries(
-                exchange          = groww.EXCHANGE_NSE,
+                exchange          = exch_const,
                 underlying_symbol = underlying_symbol,
                 year              = year,
                 month             = month,
@@ -91,7 +102,7 @@ def _fetch_expiries_for_month(groww, underlying_symbol: str,
                       f"(attempt {attempt+1}/{max_retries})")
                 time.sleep(wait)
             else:
-                print(f"  ⚠ get_expiries({underlying_symbol}, {year}-{month:02d}): {e}")
+                print(f"  ⚠ get_expiries({underlying_symbol}, {year}-{month:02d}, {exchange}): {e}")
                 break
 
     _EXPIRY_CACHE[cache_key] = []
@@ -103,7 +114,8 @@ def build_expiry_calendar(underlying_symbol: str,
                            end_date: str,
                            groww,
                            roll_days_before: int = 1,
-                           futures_only: bool = True) -> dict:
+                           futures_only: bool = True,
+                           exchange: str = 'NSE') -> dict:
     """
     Build a mapping of {calendar_date → (expiry_date, futures_symbol)} for every
     calendar date in [start_date, end_date].
@@ -138,7 +150,8 @@ def build_expiry_calendar(underlying_symbol: str,
     cursor = fetch_start
     while cursor <= fetch_end:
         month_expiries = _fetch_expiries_for_month(
-            groww, underlying_symbol, cursor.year, cursor.month
+            groww, underlying_symbol, cursor.year, cursor.month,
+            exchange=exchange,
         )
         all_expiries.extend(month_expiries)
         # Advance to next month
@@ -168,7 +181,6 @@ def build_expiry_calendar(underlying_symbol: str,
           f"{all_expiries[0]} → {all_expiries[-1]}")
 
     # ── Build date → (expiry, symbol) mapping ─────────────────────────────────
-    exchange = 'NSE'
     calendar = {}
     current_day = start
 

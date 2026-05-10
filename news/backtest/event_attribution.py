@@ -1,0 +1,244 @@
+"""Tabulate the attributed cause + first-reporter for each high-vol NIFTY day.
+
+For each catalyst headline (the actual scoop or trigger phrase reported by the
+first source), check whether our current keyword dictionary would have
+classified it.
+"""
+from __future__ import annotations
+
+import csv
+import sys
+from datetime import datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(ROOT))
+
+from news.scorer import score_headline  # noqa
+from news.dedup import IST  # noqa
+
+
+# Each row: (date, time_ist, dir, ret_bps, attributed_cause, first_reporter,
+#           first_report_date, scoop_or_trigger_headline,
+#           keyword_class_expected_or_NA)
+EVENTS = [
+    ("2025-11-07", "13:26", "+", 17.6,
+     "Cooler-than-expected US CPI (2.7%) lifted Fed rate-cut hopes",
+     "BLS / wire services", "2025-11-07",
+     "US CPI eases to 2.7%, lowest since July; rate cut bets rise",
+     "monetary_dovish (cpi_soft + rate cut bets)"),
+
+    ("2025-11-14", "15:00", "+", 19.9,
+     "Falling crude + early US-Iran diplomatic optimism (pre-cursor to May event)",
+     "Reuters / wire", "2025-11-14",
+     "Crude tumbles on US-Iran diplomatic talks optimism",
+     "geopolitical_deescalation (talks, hopes) + oil_crash"),
+
+    ("2026-01-21", "14:17", "+", 20.7,
+     "Trump backs Sen. Graham 'Sanctioning Russia Act' bill — proposes 500% tariff "
+     "on India/China for buying Russian oil; intraday whipsaw on tariff-truce headlines",
+     "Sen. Lindsey Graham press statement (NSession) → Al Jazeera/Tribune/Business Standard",
+     "2026-01-08 (bill); 2026-01-21 (intraday volatility from tariff/trade-talks chatter)",
+     "Trump backs bill to sanction India/China over Russian oil — 500% tariff",
+     "trade_escalation (tariff hike / trade war)"),
+
+    ("2026-01-27", "09:38", "+", 24.2,
+     "Pre-Budget gap-up; specific catalyst not pinpointed in retro search",
+     "Domestic press (pre-Budget commentary)", "n/a",
+     "(no clear single scoop)",
+     "(unlikely to classify — domestic positioning)"),
+
+    ("2026-01-30", "14:47", "+", 17.7,
+     "Pre-Union-Budget caution / late-session squaring",
+     "Domestic press", "n/a",
+     "(positioning move)",
+     "(unlikely to classify)"),
+
+    ("2026-02-02", "09:58", "-", 18.2,
+     "Hangover from Budget 2026 STT hike on F&O announced 1-Feb",
+     "Finance Minister Sitharaman Budget speech (live, all wires simultaneous)",
+     "2026-02-01",
+     "Budget 2026 hikes STT on F&O trades",
+     "(domestic policy — not in current taxonomy)"),
+
+    ("2026-02-27", "15:00", "-", 24.8,
+     "Anthropic launched Claude Cowork Agent — 'SaaSpocalypse'; Nifty IT -4%; "
+     "compounded by F&O expiry + pre-GDP positioning",
+     "Anthropic press release / Fortune (initial Jan launch); "
+     "FinancialContent / CNBC for Feb-24 enterprise update",
+     "2026-01-13 initial; 2026-02-24 enterprise; 2026-02-26 SaaSpocalypse coverage",
+     "Anthropic releases Claude Cowork — autonomous AI agent threatens SaaS",
+     "(NOT in taxonomy — corporate AI disruption)"),
+
+    ("2026-03-02", "14:03", "+", 27.1,
+     "Late-session bounce; mixed Iran-headlines + sector rotation. "
+     "Top retro-headline was 'Stocks That Crashed' (post-hoc, not catalyst)",
+     "(no single clear scoop in retro search)", "n/a",
+     "(no clear single scoop)",
+     "(would not classify cleanly)"),
+
+    ("2026-03-06", "14:48", "-", 28.5,
+     "Middle East / US-Iran tensions, Brent moving toward $100, FII outflows",
+     "Wire reports across week 9-13 March", "n/a",
+     "Crude rises on Iran tensions; FII outflows surge",
+     "geopolitical_escalation + oil_spike + india_macro_negative (FII outflow)"),
+
+    ("2026-03-09", "10:51", "+", 29.9,
+     "Reversal bounce mid-Iran-war week; specific micro-catalyst unclear",
+     "(no single clear scoop)", "n/a",
+     "(no clear single scoop)",
+     "(would not classify cleanly)"),
+
+    ("2026-03-12", "11:18", "-", 27.3,
+     "Escalating Middle East tensions, India VIX +4% to 21",
+     "Reuters / Bloomberg wire (region escalation)", "2026-03-11/12",
+     "Middle East escalation: airstrikes, oil supply fears intensify",
+     "geopolitical_escalation"),
+
+    ("2026-03-16", "14:18", "+", 26.8,
+     "Mixed Iran headlines, intraday short-cover bounce",
+     "(no single clear scoop)", "n/a",
+     "(no clear single scoop)",
+     "(would not classify cleanly)"),
+
+    ("2026-03-17", "14:16", "-", 17.9,
+     "Nifty IT -1% on global tech weakness + Mid-East risk-off",
+     "Multiple", "n/a",
+     "Nifty IT extends losing streak; Middle East risk weighs",
+     "(IT-specific, not in current taxonomy)"),
+
+    ("2026-03-19", "14:55", "-", 25.6,
+     "Brent crude $110+, US-Israel-Iran escalation, hawkish Fed comments, "
+     "FII selling; HDFC Bank chairman Atanu Chakraborty resigns (corporate)",
+     "Bloomberg / Business Standard / Economic Times wire on energy attack; "
+     "HDFC Bank stock-exchange filing for chairman resignation",
+     "2026-03-18 evening (HDFC) / 2026-03-19 (oil)",
+     "Crude soars above $110 on Mid-East escalation; HDFC Bank chairman resigns",
+     "oil_spike + geopolitical_escalation; corporate_india_megacap "
+     "(HDFC + 'ceo resigns')"),
+
+    ("2026-03-20", "15:01", "+", 25.3,
+     "Oil prices ease; Trump-Netanyahu signal no immediate escalation",
+     "Reuters / Al Jazeera / Bloomberg", "2026-03-20",
+     "Trump and Netanyahu signal no immediate escalation; oil eases from $119",
+     "geopolitical_deescalation + oil_crash"),
+
+    ("2026-03-23", "14:33", "-", 21.7,
+     "Indian LPG tankers fired upon in Strait of Hormuz; FII outflows; INR low; "
+     "HDFC leadership concerns",
+     "UK Maritime Trade Operations Center; TankerTrackers.com (X/Twitter); "
+     "scaled out via Reuters/AP",
+     "2026-03-21/22 (incident); 2026-03-23 (market reaction)",
+     "Two Indian-flagged tankers fired upon in Strait of Hormuz",
+     "geopolitical_escalation (tanker attacked / hormuz disruption)"),
+
+    ("2026-03-24", "12:22", "+", 27.5,
+     "Trump Truth Social post: 5-day halt on strikes against Iran energy "
+     "infrastructure; Brent crashed -10% to $100",
+     "Trump Truth Social → Bloomberg, CNBC, Al Jazeera, NBC simultaneous coverage",
+     "2026-03-23 (Mon Truth Social)",
+     "Trump postpones Iran energy strikes for five days after 'productive' talks",
+     "geopolitical_deescalation (productive talks, halts operation, "
+     "suspends operation) + oil_crash"),
+
+    ("2026-04-01", "13:41", "-", 22.8,
+     "Re-escalation in West Asia; oil up; FII selling persists",
+     "Wire services (Reuters/Bloomberg)", "2026-04-01",
+     "West Asia tensions reignite as Iran rejects further talks",
+     "geopolitical_escalation"),
+
+    ("2026-04-02", "14:46", "+", 20.7,
+     "Final-hour buying — recovered from early Iran-tension dip",
+     "(no single clear scoop)", "n/a",
+     "(no clear single scoop)",
+     "(would not classify cleanly)"),
+
+    ("2026-04-06", "12:20", "+", 28.0,
+     "US-Iran two-week ceasefire (mediated by Pakistan); Strait of Hormuz "
+     "reopening; Brent $115 → $95-98",
+     "Trump Truth Social post (Mon morning US time, evening IST 2026-04-06/07); "
+     "Pakistan PM/military mediation reported by Fox News/CBS/NBC",
+     "2026-04-06 (US time evening) — broadly published 04-07 IST",
+     "Trump pauses Iran strikes for two weeks to negotiate 10-point peace deal",
+     "geopolitical_deescalation (ceasefire + 10-point peace deal)"),
+
+    ("2026-04-07", "09:26", "+", 19.0,
+     "Continuation of ceasefire-rally + KOSPI / global tech surge",
+     "Multiple wire", "2026-04-07",
+     "Sensex jumps 500 points on global rally and ceasefire optimism",
+     "geopolitical_deescalation"),
+
+    ("2026-04-10", "14:15", "-", 20.2,
+     "FII outflows continue; Iran ceasefire fragility; oil bounce",
+     "Wire services", "2026-04-10",
+     "Markets fall on Iran ceasefire jitters; oil ticks up",
+     "(weak — depends on phrasing; might miss without 'ceasefire broken')"),
+
+    ("2026-04-13", "15:00", "-", 17.6,
+     "US-Iran Islamabad peace talks COLLAPSED over the weekend; "
+     "Strait of Hormuz risk re-emerges",
+     "NPR (5:40 AM ET, 2026-04-12) — earliest of the major outlets; "
+     "WaPo / Al Jazeera / NBC same day",
+     "2026-04-12 morning ET",
+     "US-Iran peace talks collapse in Islamabad after 21 hours of negotiation",
+     "geopolitical_escalation (talks collapse — but 'talks collapse' is "
+     "a NEGATION_BLOCKER for de-escalation, not currently a positive trigger "
+     "for escalation. CLASSIFIER GAP)"),
+
+    ("2026-05-06", "14:20", "+", 20.2,
+     "Axios scoop: 'one-page memo to end war' between US and Iran",
+     "AXIOS (Barak Ravid), 14:20 IST exclusive",
+     "2026-05-06 14:20 IST",
+     "Exclusive: U.S. and Iran closing in on one-page memo to end war",
+     "geopolitical_deescalation (closing in on memo, end war, "
+     "memo to end war — ALL added in latest keywords expansion)"),
+]
+
+
+def main():
+    print(f"{'date':<11} {'time':<6} {'dir':<3} {'bps':>5}  cause / first-reporter")
+    print("-" * 130)
+
+    coverage = {"caught": 0, "missed": 0, "ambiguous": 0}
+    for (date, t, d, bps, cause, who, when, scoop, cls) in EVENTS:
+        # Score the scoop headline through current keyword dict
+        if scoop and not scoop.startswith("("):
+            s = score_headline(scoop, "Wire", 1.0, datetime.now(IST))
+            caught = bool(s["event_class"])
+        else:
+            caught = False
+        marker = "✓" if caught else ("△" if "(weak" in cls or "(unlikely" in cls
+                                     else "✗" if "(NOT" in cls or "GAP" in cls
+                                     else "?")
+        if caught: coverage["caught"] += 1
+        elif "(NOT" in cls or "GAP" in cls: coverage["missed"] += 1
+        else: coverage["ambiguous"] += 1
+
+        print(f"{date:<11} {t:<6} {d:<3} {bps:>5.1f}  {marker} {cause[:90]}")
+        print(f"{'':<11} {'':<6} {'':<3} {'':>5}    first-reporter: {who}")
+        if when != "n/a":
+            print(f"{'':<11} {'':<6} {'':<3} {'':>5}    first-report-date: {when}")
+        print(f"{'':<11} {'':<6} {'':<3} {'':>5}    classifier path: {cls}")
+        print()
+
+    n = len(EVENTS)
+    print("─" * 80)
+    print(f"Coverage of current keyword dictionary against attributed catalysts:")
+    print(f"  ✓  caught          : {coverage['caught']:>2}/{n}  ({100*coverage['caught']/n:.0f}%)")
+    print(f"  ✗  classifier gap  : {coverage['missed']:>2}/{n}")
+    print(f"  ?  ambiguous/no-scoop: {coverage['ambiguous']:>2}/{n}")
+
+    # Save CSV
+    out = ROOT / "news" / "backtest" / "event_attribution.csv"
+    with open(out, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["date","time_ist","dir","ret_bps","attributed_cause",
+                    "first_reporter","first_report_date","scoop_headline",
+                    "classifier_path"])
+        for row in EVENTS:
+            w.writerow(row)
+    print(f"\nCSV → {out}")
+
+
+if __name__ == "__main__":
+    main()

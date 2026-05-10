@@ -31,18 +31,29 @@ def run_compounded(trade_log: pd.DataFrame,
                    instrument_config: dict,
                    starting_capital: float = 1_00_000,
                    max_capital_pct: float = 0.90,
-                   min_lots: int = 1) -> tuple:
+                   min_lots: int = 1,
+                   per_trade_risk_cap_pct: float = 0.02,
+                   daily_loss_halt_pct: float = 0.05) -> tuple:
     """
     Sequentially walk trades, compounding equity.
 
     Parameters
     ----------
-    trade_log         : DataFrame from a strategy run (needs columns
-                        entry_ts, exit_ts, date, pnl_pts).
-    instrument_config : dict from config.INSTRUMENTS[instrument]
-    starting_capital  : initial equity (₹)
-    max_capital_pct   : fraction of equity deployable per trade (margin cap)
-    min_lots          : minimum lots per trade
+    trade_log              : DataFrame from a strategy run (needs columns
+                             entry_ts, exit_ts, date, pnl_pts).
+    instrument_config      : dict from config.INSTRUMENTS[instrument]
+    starting_capital       : initial equity (₹)
+    max_capital_pct        : fraction of equity deployable per trade (margin cap)
+    min_lots               : minimum lots per trade
+    per_trade_risk_cap_pct : hard cap on per-trade DOWN-side P&L as fraction of
+                             equity-at-entry. e.g. 0.02 ⇒ a single losing trade
+                             can never lose more than 2% of equity-at-entry,
+                             regardless of how many lots the margin would have
+                             allowed. Set to 0 to disable. (P0 risk control.)
+    daily_loss_halt_pct    : if cumulative P&L on the trade's date drops below
+                             -daily_loss_halt_pct × start-of-day equity, ALL
+                             subsequent trades that same day are SKIPPED
+                             (lots=0, pnl_rs=0). Set to 0 to disable.
 
     Returns
     -------
@@ -61,7 +72,21 @@ def run_compounded(trade_log: pd.DataFrame,
     peak   = equity
     rows_cap, rows_lots, rows_eq, rows_pnl, rows_dd = [], [], [], [], []
 
+    # Daily-loss-halt state
+    cur_day        = None
+    sod_equity     = equity   # equity at start-of-day
+    day_realised   = 0.0      # cumulative P&L on cur_day
+
+    halts = 0
+    risk_capped = 0
+
     for _, row in tl.iterrows():
+        row_date = pd.Timestamp(row['date']).date()
+        if cur_day != row_date:
+            cur_day      = row_date
+            sod_equity   = equity
+            day_realised = 0.0
+
         # per_trade_risk_pct overrides max_capital_pct (used by options strategies)
         _rp = row.get('per_trade_risk_pct', None)
         trade_risk_pct = float(_rp) if (_rp is not None and not pd.isna(_rp)) else max_capital_pct
@@ -74,10 +99,44 @@ def run_compounded(trade_log: pd.DataFrame,
         lot_size   = _lot_size_for_date(row['date'], instrument_config)
         pnl_pts    = row.get('pnl_pts', 0) or 0
         direction_sign = 1  # pnl_pts already signed in strategy output
+
+        # ── Daily-loss halt ─────────────────────────────────────────────
+        if (daily_loss_halt_pct > 0 and sod_equity > 0
+                and day_realised <= -daily_loss_halt_pct * sod_equity):
+            # Skip this trade entirely
+            halts += 1
+            capital_at_entry = equity
+            rows_cap.append(capital_at_entry)
+            rows_lots.append(0)
+            rows_eq.append(equity)
+            rows_pnl.append(0.0)
+            peak   = max(peak, equity)
+            dd_pct = (peak - equity) / peak * 100 if peak > 0 else 0
+            rows_dd.append(dd_pct)
+            continue
+
+        # ── Per-trade risk cap (downsize lots if a full-margin sizing
+        #    would risk more than per_trade_risk_cap_pct of equity) ─────
+        if per_trade_risk_cap_pct > 0 and pnl_pts < 0:
+            max_loss_rs = per_trade_risk_cap_pct * equity
+            # implied loss at current sizing
+            implied_loss = abs(pnl_pts) * lots * lot_size + brokerage
+            if implied_loss > max_loss_rs and lot_size > 0 and pnl_pts != 0:
+                # Cap lots so loss ≤ max_loss_rs
+                capped_lots = int(math.floor(
+                    (max_loss_rs - brokerage) / (abs(pnl_pts) * lot_size)
+                ))
+                if capped_lots < lots:
+                    lots = max(capped_lots, 0)
+                    risk_capped += 1
+
         pnl_rs     = round(pnl_pts * lots * lot_size * direction_sign - brokerage, 2)
+        if lots == 0:
+            pnl_rs = 0.0
 
         capital_at_entry = equity
         equity          += pnl_rs
+        day_realised    += pnl_rs
         peak             = max(peak, equity)
         dd_pct           = (peak - equity) / peak * 100 if peak > 0 else 0
 
@@ -120,6 +179,8 @@ def run_compounded(trade_log: pd.DataFrame,
         'max_dd_pct':     round(max(rows_dd) if rows_dd else 0, 2),
         'win_rate':       round(tl['win'].mean() * 100, 2),
         'years':          round(years, 2),
+        'halts_daily':    halts,
+        'risk_capped':    risk_capped,
     }
     return tl, ec, summary
 

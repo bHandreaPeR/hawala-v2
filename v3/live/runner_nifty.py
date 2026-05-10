@@ -9,8 +9,8 @@ Flow:
   10:15+     → Signal engine fires every minute via SignalSmoother.
                First bar where smoothed direction != 0 and |score| > threshold
                → ENTER ATM CE (LONG) or ATM PE (SHORT).
-  10:15–14:45→ Position open. Log P&L each minute.
-  14:45 PM   → Exit position. Log final P&L.
+  11:00–15:20→ Position open. Log P&L each minute.
+  15:20 PM   → Exit position. Log final P&L.
 
 Per-minute data feed:
   1. get_option_chain(NSE, NIFTY, expiry)  → spot (underlying_ltp), all strikes
@@ -52,7 +52,7 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(ROOT / 'v3' / 'live' / 'runner.log', mode='a'),
+        logging.FileHandler(ROOT / 'logs' / 'trade_bot' / 'runner_nifty.log', mode='a'),
     ]
 )
 log = logging.getLogger('live_runner_nifty')
@@ -179,7 +179,7 @@ def _fmt_morning_alert(today: date, static: dict, clf: Optional[object]) -> str:
         f"DTE: <b>{dte}</b>\n"
         f"{clf_line}\n"
         f"SL: –50%  |  TP: +100%\n"
-        f"Entry window: 10:15 → 14:45"
+        f"Entry window: 11:00 → 13:00  |  EOD: 15:20"
     )
 
 
@@ -265,7 +265,7 @@ def _fmt_exit_alert(
     reason_map = {
         'SL':       '🛑 Stop Loss hit (–50%)',
         'TP':       '🎯 Take Profit hit (+100%)',
-        'EOD':      '🕥 EOD exit (14:45)',
+        'EOD':      '🕥 EOD exit (15:20)',
         'REVERSAL': '🔄 Signal reversal',
     }
     reason_str = reason_map.get(exit_reason, exit_reason)
@@ -357,6 +357,15 @@ def _fetch_option_chain(g, expiry: date) -> Optional[dict]:
 
     if not raw_strikes:
         log.warning("get_option_chain returned empty strikes: expiry=%s response_keys=%s", exp_str, list(r.keys()) if r else None)
+        return None
+
+    # Defensive: Groww historically returned a list; current format is dict[str_strike→data].
+    # If a list arrives (API regression or partial response), log and bail rather than crash.
+    if not isinstance(raw_strikes, dict):
+        log.warning(
+            "get_option_chain: unexpected strikes type: expiry=%s type=%s — skipping bar",
+            exp_str, type(raw_strikes).__name__,
+        )
         return None
 
     ce_oi: dict  = {}

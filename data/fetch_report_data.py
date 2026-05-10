@@ -387,6 +387,12 @@ def _fetch_news():
             print(f"  ⚠ News feed {source_name} ({url[:45]}): {e}")
             continue
 
+    # ── Zerodha Pulse — curated India market headlines ────────────────────────
+    for item in _fetch_pulse_news():
+        if item["headline"] not in seen:
+            seen.add(item["headline"])
+            results.append(item)
+
     if not results:
         return []
 
@@ -426,6 +432,62 @@ def _classify_news(headline):
                                "rupee", "inflation", "budget"]):
         return "india"
     return "macro"
+
+
+def _fetch_pulse_news(max_items: int = 30):
+    """
+    Scrape Zerodha Pulse (pulse.zerodha.com) for the latest curated India market headlines.
+    Site is plain PHP/HTML — no JS needed, no auth, no RSS/API.
+    Sources: NDTV Business, Economic Times, The Hindu Business (Zerodha-curated).
+
+    Items are returned newest-first; we take the top max_items without date filtering
+    because the daily report runs at 07:30 IST when today's news is sparse — yesterday's
+    closing session headlines are exactly what the pre-market report needs.
+
+    Returns list of {"headline", "tag", "source", "priority"} dicts.
+    """
+    HDR = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                         "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"}
+    try:
+        r = requests.get("https://pulse.zerodha.com/", timeout=10, headers=HDR)
+        if not r.ok:
+            print(f"  ⚠ Pulse fetch HTTP {r.status_code}")
+            return []
+    except Exception as e:
+        print(f"  ⚠ Pulse fetch: {e}")
+        return []
+
+    # Each news item is a <li class="box item"> block (already sorted newest-first)
+    item_blocks = re.findall(
+        r'<li class="box item"[^>]*>(.*?)</li>', r.text, re.DOTALL)
+
+    results, seen_hl = [], set()
+
+    for block in item_blocks[:max_items]:
+        # Headline from <h2 class="title"><a ...>TEXT</a></h2>
+        hl_m = re.search(r'<h2 class="title">\s*<a[^>]*>([^<]+)</a>', block)
+        if not hl_m:
+            continue
+        headline = _html_lib.unescape(hl_m.group(1)).strip()
+        if len(headline) < 25 or headline in seen_hl:
+            continue
+        seen_hl.add(headline)
+
+        # Source publication from <span class="feed">— NDTV Business</span>
+        src_m = re.search(r'<span class="feed">—\s*([^<]+)</span>', block)
+        source = src_m.group(1).strip() if src_m else "Pulse (Zerodha)"
+
+        tag      = _classify_news(headline) or "india"
+        priority = sum(1 for kw in _HIGH_PRIORITY if kw in headline.lower())
+        # Floor of 2: Pulse is Zerodha-curated specifically for market traders — always
+        # treat as high-signal so they compete in the first-pass selection alongside RSS
+        priority = max(priority, 2)
+
+        results.append({"headline": headline, "tag": tag,
+                        "source": source, "priority": priority})
+
+    print(f"  📰 Pulse: {len(results)} headlines scraped")
+    return results
 
 
 # ── Crypto Fear & Greed (alternative.me) ────────────────────────────────────

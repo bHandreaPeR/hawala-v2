@@ -48,6 +48,8 @@ echo "============================================================"
 
 cd "$PROJECT_ROOT"
 
+PYTHON=/opt/anaconda3/bin/python3
+
 # ── Helper ────────────────────────────────────────────────────────────────────
 run_step() {
     local name="$1"
@@ -56,7 +58,7 @@ run_step() {
     echo ""
     echo "▶  $name"
     echo "   script: $script"
-    if python3 "$script" $extra_args; then
+    if $PYTHON "$script" $extra_args; then
         echo "   ✓  $name — OK"
     else
         echo "   ✗  $name — FAILED (exit code $?)"
@@ -82,7 +84,7 @@ echo ""
 
 # ── Full cache freshness report ──────────────────────────────────────────────
 echo "Cache freshness check (pre-market):"
-python3 - <<'PYEOF'
+$PYTHON - <<'PYEOF'
 import pickle, pandas as pd
 from pathlib import Path
 from datetime import date, timedelta

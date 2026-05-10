@@ -1,205 +1,210 @@
-# Hawala v3 — System Architecture
-_Last updated: May 2026_
+# Hawala v2 — Live Architecture & Final Backtest
+
+> Generated 2026-05-10 after the P0 risk-control pass (realistic slippage,
+> per-trade risk cap, daily loss limit, two-bot Telegram split).
 
 ---
 
-## Overview
-
-Hawala v3 is a live intraday options trading system for NIFTY and BANKNIFTY. It runs paper trades by default. Real orders require explicit `--live` flag (not yet implemented).
-
----
-
-## Repository Structure
+## 1. Process topology
 
 ```
-Hawala v2/                          ← workspace root
-├── v3/
-│   ├── live/
-│   │   ├── runner_nifty.py         ← NIFTY live runner (primary)
-│   │   ├── runner_banknifty.py     ← BANKNIFTY live runner
-│   │   ├── runner.log              ← NIFTY runner output (appended each session)
-│   │   └── runner_banknifty.log    ← BN runner output
-│   ├── backtest/
-│   │   ├── run_backtest_nifty.py   ← NIFTY backtest (Jan–Apr 2026)
-│   │   ├── run_backtest_banknifty.py
-│   │   └── *.csv                   ← trade log outputs
-│   ├── signals/
-│   │   ├── engine.py               ← compute_signal_state(), SignalSmoother
-│   │   └── fii_dii_classifier.py   ← FIIDIIClassifier (MIN_WINDOW=5)
-│   └── cache/
-│       ├── candles_1m_NIFTY.pkl    ← 1m futures candle cache (daily backfill)
-│       ├── candles_1m_BANKNIFTY.pkl
-│       ├── option_oi_1m_NIFTY.pkl  ← option chain OI history
-│       ├── fii_dii_thresholds.json              ← Nifty classifier thresholds
-│       ├── fii_dii_thresholds_BANKNIFTY.json    ← BN-specific thresholds
-│       └── fii_dii_thresholds_COMBINED.json     ← combined market thresholds
-├── alerts/
-│   └── telegram.py                 ← send(token, chat_id, msg)
-├── restart_runners.sh              ← START HERE — kills old, starts both runners
-├── kill_runners.sh                 ← kill both runners, confirm dead
-├── alert_runner.py                 ← OLD Hawala v2 master (ORB/VWAP/IC for BN)
-│                                      ⚠ NEVER run alongside restart_runners.sh
-└── token.env                       ← API keys (gitignored)
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              token.env (shared)                            │
+│  GROWW_API_KEY / GROWW_TOTP_SECRET                                         │
+│  TELEGRAM_BOT_TOKEN          TELEGRAM_CHAT_IDS         (TRADE bot)         │
+│  TELEGRAM_BOT_TOKEN_MACRO    TELEGRAM_CHAT_IDS_MACRO   (MACRO bot)         │
+└────────────────────────────────────────────────────────────────────────────┘
+                                     │
+       ┌─────────────────────────────┼──────────────────────────────┐
+       ▼                             ▼                              ▼
+┌───────────────┐          ┌───────────────────┐         ┌──────────────────┐
+│ alert_runner  │          │ alerts/vp_live_   │         │ bots/macro_bot   │
+│      .py      │          │   daemon.py       │         │                  │
+│               │          │                   │         │                  │
+│  ORB / VWAP   │          │  VP-Trail-Swing   │         │  Macro briefs    │
+│  futures      │          │  signals (3 inst) │         │  07:30 / 12:00   │
+│  & options    │          │                   │         │  / 16:00 IST     │
+│               │          │  polls every 5 m  │         │                  │
+│  TRADE bot ──►│          │  TRADE bot ──────►│         │  MACRO bot ─────►│
+│               │          │                   │         │                  │
+│  09:15→15:30  │          │  09:15→15:30      │         │  fixed cron      │
+└───────────────┘          └───────────────────┘         └──────────────────┘
+       │                             │                              │
+       └────────────► Telegram TRADE channel ◄────────┘              │
+                                                                     │
+                                       Telegram MACRO channel ◄──────┘
+```
+
+Three independent processes. Crash of one does not kill the others. Both
+trade-side processes (alert_runner + vp_live_daemon) write to the **same**
+TRADE Telegram channel so the user sees one chronological feed of signals.
+
+---
+
+## 2. Strategy stack (active)
+
+| Strategy           | Vehicle    | Trigger                                 | Source                                    |
+|--------------------|------------|-----------------------------------------|-------------------------------------------|
+| Futures ORB        | Futures    | Gap 50–100 pts, Tue/Wed/Fri             | `strategies/orb.py`                       |
+| Options ORB        | ATM option | Gap > 100 pts, Tue/Wed/Fri              | `strategies/options_orb.py`               |
+| **VP-Trail-Swing** | Futures    | Pierce of 70% Value Area + reversal     | `strategies/vp_trailing_swing.py`         |
+
+Per-instrument tuning lives in `run_canonical.py` → `CANONICAL_PARAMS`.
+
+Dropped (in `_archived/`): VWAP_REV (decayed OOS), long-options overlay
+(theta drag), credit spreads (-₹4.8L on 4½ years), original VP simple-target.
+
+---
+
+## 3. Risk controls (P0 — newly added)
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Layer 1 — Strategy-level (vp_trailing_swing.py)                          │
+│   VPT_SLIPPAGE_PTS         BN=30, NIFTY=10, SENSEX=20    (per leg)       │
+│   VPT_DAILY_MAX_LOSS_PTS   BN=600, NIFTY=200, SENSEX=400 (halt new ents) │
+│                                                                          │
+│ Layer 2 — Compounding-engine (backtest/compounding_engine.py)            │
+│   per_trade_risk_cap_pct=0.02  (2% equity-at-entry hard cap on a loss)   │
+│   daily_loss_halt_pct=0.05     (5% intraday drawdown ⇒ skip new trades)  │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+Slippage is realistic — 30 pts/leg on BANKNIFTY ≈ what fast-market stop
+orders actually fill at. NIFTY tighter (10), SENSEX in between (20).
+
+---
+
+## 4. Final backtest — 1-lot, no compounding, REALISTIC slippage
+
+`python run_canonical.py` (4½ years: 2022-01 → 2026-05)
+
+```
+INSTRUMENT    TRADES    WR     P&L           AVG/TRADE    MAX-DD       MAX-LOSS
+─────────────────────────────────────────────────────────────────────────────────
+BANKNIFTY       218    27.5%  ₹  -57,470     ₹   -264    ₹ +187,956   ₹ -20,390
+NIFTY           120    31.7%  ₹  +31,258     ₹   +260    ₹  +39,406   ₹  -6,101
+SENSEX           92    41.3%  ₹  +70,470     ₹   +766    ₹  +14,012   ₹  -5,799
+─────────────────────────────────────────────────────────────────────────────────
+COMBINED        430    31.6%  ₹  +44,259     ₹   +103    ₹ +187,956   ₹ -20,390
+
+  IS   (2022-2025, 4 yrs)  n=396  WR=31.1%  P&L ₹  -59,477  avg ₹ -150
+  OOS  (2026 YTD,    5 mo) n= 34  WR=38.2%  P&L ₹+103,736  avg ₹+3,051
+```
+
+### Year-by-year
+
+```
+                BANKNIFTY              NIFTY                 SENSEX
+year      n    wr     pnl       n    wr     pnl       n    wr     pnl
+─────────────────────────────────────────────────────────────────────────
+2022     45  26.7  +51,166     22  40.9  +22,801      —     —      —
+2023     46  21.7  -81,062     22  31.8   -2,930      —     —      —
+2024     53  35.8  +37,311     38  28.9  -15,635     32  40.6  +31,799
+2025     58  25.9  -92,490     32  25.0   -8,277     48  39.6   -2,159
+2026 ⚐   16  25.0  +27,605      6  50.0  +35,300     12  50.0  +40,831
+─────────────────────────────────────────────────────────────────────────
+                                                       ⚐ = OOS, 5mo only
+```
+
+### What this says
+
+- **SENSEX is the strongest leg** — 41% WR, +₹70k on 92 trades, smooth equity
+  curve, OOS 2026 is best year so far.
+- **NIFTY is marginal but profitable** — 31.7% WR, low avg-per-trade (+₹260),
+  small drawdowns, OOS 2026 already +₹35k.
+- **BANKNIFTY is the problem child** — 27.5% WR, net negative IS, but OOS
+  2026 is +₹27k. The 2023 (-₹81k) and 2025 (-₹92k) drawdowns are what the
+  per-trade risk cap and daily loss halt are designed to soften in live.
+- **OOS 2026** (5 months) on all 3 = +₹103k on 34 trades. Holds up.
+
+### What changed vs the pre-slippage canonical run
+
+```
+                              BEFORE        AFTER
+                              (5 pt slip)   (realistic 10/20/30)
+─────────────────────────────────────────────────────────────────
+BANKNIFTY  total P&L           +₹3.4 L      -₹0.6 L      (Δ -₹4 L)
+NIFTY      total P&L           +₹0.5 L      +₹0.3 L      (Δ -₹0.2 L)
+SENSEX     total P&L           +₹1.0 L      +₹0.7 L      (Δ -₹0.3 L)
+─────────────────────────────────────────────────────────────────
+COMBINED                       +₹4.9 L      +₹0.4 L      (Δ -₹4.5 L)
+```
+
+Slippage realism is **brutal** on BANKNIFTY because lot=30 multiplies the
+30-pt fill cost: 218 trades × 30 lot × 60 pts round-trip ≈ ₹3.92 L of
+realistic slippage that the prior 5-pt assumption was hiding.
+
+**Conclusion**: The strategy still has positive expectancy net of realistic
+costs (+₹44k on 1 lot each over 4½ yrs), but the edge is smaller than the
+pre-slippage numbers suggested. The OOS-2026 sample is encouraging but
+short. Paper-trade for 1–2 months before scaling.
+
+---
+
+## 5. Files reference
+
+| File                                  | Purpose                                              |
+|---------------------------------------|------------------------------------------------------|
+| `run_canonical.py`                    | 1-lot reproducible backtest of the final config      |
+| `run_baseline.py`                     | Compounded full-stack backtest (ORB + OPT_ORB + VPT) |
+| `alert_runner.py`                     | Live ORB/VWAP/options daemon → TRADE bot             |
+| **`alerts/vp_live_daemon.py`**        | **NEW** — Live VP signal daemon → TRADE bot          |
+| `alerts/vp_signal_alert.py`           | Telegram message formatter for raw VP signals        |
+| `bots/macro_bot.py`                   | Pre/mid/post-market briefs → MACRO bot               |
+| `strategies/vp_trailing_swing.py`     | Canonical VP strategy (slippage + DLL added)         |
+| `strategies/orb.py`                   | v2 ORB                                               |
+| `strategies/options_orb.py`           | v2 Options ORB                                       |
+| `backtest/compounding_engine.py`      | Sequential compounder (risk cap + daily halt added)  |
+| `data/fetch_15m_futures.py`           | 15m futures cache fetcher                            |
+| `research/trade_explorer.py`          | Per-trade chart visualisation                        |
+| `_archived/`                          | Dropped strategies                                   |
+| `DEPLOYMENT.md`                       | Operational runbook                                  |
+| `ARCHITECTURE.md` *(this file)*       | Live architecture + final backtest                   |
+
+---
+
+## 6. Running the live stack
+
+```sh
+# 1. Trade-alert process (ORB / VWAP / options) — original bot
+caffeinate -i python alert_runner.py
+
+# 2. VP signal daemon — same TRADE bot, alongside alert_runner
+caffeinate -i python -m alerts.vp_live_daemon --mode daemon
+
+# 3. Macro brief daemon — separate MACRO bot
+python -m bots.macro_bot --mode daemon
+```
+
+Or via cron:
+
+```sh
+# trade side (caffeinate keeps the laptop awake)
+15  9 * * 1-5  cd /path/to/hawala && caffeinate -i python alert_runner.py
+15  9 * * 1-5  cd /path/to/hawala && caffeinate -i python -m alerts.vp_live_daemon --mode daemon
+
+# macro side (3 fixed slots OR one daemon)
+30  7 * * 1-5  cd /path/to/hawala && python -m bots.macro_bot --mode premarket
+ 0 12 * * 1-5  cd /path/to/hawala && python -m bots.macro_bot --mode midday
+ 0 16 * * 1-5  cd /path/to/hawala && python -m bots.macro_bot --mode eod
 ```
 
 ---
 
-## How to Run
+## 7. Pre-live checklist
 
-```bash
-# Standard: start/restart both runners
-cd /path/to/Hawala\ v2/Hawala\ v2
-bash restart_runners.sh
+Before deploying real capital:
 
-# Kill without restart
-bash kill_runners.sh
+- [x] Slippage realism — done (BN=30 / NIFTY=10 / SENSEX=20 pt per leg)
+- [x] Daily loss limit — done (BN=600 / NIFTY=200 / SENSEX=400 pt halt)
+- [x] Per-trade risk cap — done (2% equity-at-entry in compounding engine)
+- [x] Two-bot Telegram split — done (TRADE + MACRO)
+- [x] Live VP signal daemon — done (`alerts/vp_live_daemon.py`)
+- [ ] **1–2 months paper-trading** to verify live signals match backtest
+- [ ] Live equity-curve dashboard — to detect strategy decay early
+- [ ] Test daemon failover (what happens if Groww auth expires intraday)
 
-# Tail logs only (runners already running)
-tail -f v3/live/runner.log v3/live/runner_banknifty.log
-```
-
-**⚠ Never run `alert_runner.py` on the same day as `restart_runners.sh`.** `alert_runner.py` spawns the v3 runners as subprocesses — running both simultaneously creates duplicate runner instances and double Telegram alerts.
-
----
-
-## Signal Engine
-
-Each runner polls every minute (9:15–15:20/15:15):
-
-| Step | Source | Signal |
-|------|--------|--------|
-| 1 | Futures 1m candles (+ OI Mode B injection) | `oi_quadrant`: long_buildup / short_buildup / long_unwind / short_cover |
-| 2 | Futures LTP vs spot | `futures_basis`: contango / backwardation |
-| 3 | Option chain CE+PE OI | `pcr`: bullish / bearish / neutral |
-| 4 | Rolling OI deque (60 bars) | `oi_velocity`: net OI change direction |
-| 5 | Option chain strike OI | `strike_defense`: wall proximity |
-| 6 | FIIDIIClassifier | `fii_signature`: FII_BULL / FII_BEAR / DII_MIXED |
-
-All 6 signals feed into `compute_signal_state()` → `SignalSmoother` → `effective_dir` (+1 LONG / -1 SHORT / 0 no-trade).
-
-### OI Mode B (live-runner fix, Apr 2026)
-
-Futures candle OI is NaN for active contracts (Groww returns 6-col response, no OI column). OI quadrant uses total option market OI as proxy:
-
-```python
-_total_option_oi = sum(chain['ce_oi'].values()) + sum(chain['pe_oi'].values())
-_bar_total_oi[df_fut['ts'].iloc[-1]] = _total_option_oi   # running history dict
-df_fut['oi'] = df_fut['ts'].map(_bar_total_oi)            # inject full history
-```
-
-This was validated against 22 backtest trades: Mode A (futures OI) vs Mode B (option OI) produces identical signal direction on 22/22 trades.
-
----
-
-## Entry Logic
-
-Entry fires when **all** of these hold simultaneously:
-1. `bar_idx >= ENTRY_BAR` (105 min after 9:15 = 11:00 AM)
-2. `current_hhmm <= LAST_ENTRY_HHMM` (13:00)
-3. `effective_dir != 0` (signal smoothed and non-zero)
-4. `abs(state.score) >= SIGNAL_SCORE_MIN` (0.35)
-5. `state.signal_count >= MIN_SIGNAL_COUNT` (5 of 6 signals must agree)
-6. Not already in position (one trade per day)
-
-### Filters (applied to reduce effective_dir to 0)
-
-| Filter | Condition | Action |
-|--------|-----------|--------|
-| F1 | \|5d regime return\| > 3% AND score < 0.50 | Veto entry |
-| F2 | PCR bearish + LONG + score < 0.55 | Suppress LONG |
-| F3 | **Majority vote** (≥2/3 classifiers): FII_BULL → block SHORT; FII_BEAR → block LONG | Hard block |
-| F4a | OI quadrant = bearish + LONG | Suppress LONG |
-| F4b | Price run-up + LONG + strike defense against | Suppress LONG |
-| F5 | Crash regime (5d < -3%) + extreme contango | Suppress LONG |
-| F6 | Price momentum (last 30 bars) diverges from direction | Suppress |
-| no_intraday | velocity_data empty AND fii_dii_result is None | Veto |
-
-**F3 uses majority vote across 3 classifiers** (BN-primary, Combined, Nifty-ref) to avoid single-classifier miscalibration blocking all entries. Falls back to single BN-primary if only one classifier loaded.
-
----
-
-## Exit Logic
-
-| Exit | Condition |
-|------|-----------|
-| Stop Loss | Option premium ≤ entry × (1 + SL_PCT) = 50% of entry |
-| Take Profit | Option premium ≥ entry × (1 + TP_PCT) = 2× entry |
-| Reversal | Signal crosses threshold in opposite direction (checked every 5 bars, after MIN_REVERSAL_HOLD=20 bars) |
-| EOD | 15:20 IST (both NIFTY and BANKNIFTY) |
-
----
-
-## Key Constants
-
-| Constant | NIFTY | BANKNIFTY | Source |
-|----------|-------|-----------|--------|
-| Lot size | **65** | **30** | NSE (confirmed May 2026) |
-| Strike step | 50 | 100 | NSE |
-| Entry bar | 105 (11:00 AM) | 105 (11:00 AM) | Backtest MIN_SIGNAL_BAR |
-| Last entry | 13:00 | 13:00 | Backtest |
-| EOD exit | 15:20 | **15:20** | Backtest (BN fixed May 2026) |
-| SL | -50% | -50% | Backtest |
-| TP | +100% | +100% | Backtest |
-| Score min | 0.35 | 0.35 | Backtest |
-| Min signals | 5/6 | 5/6 | Backtest |
-| Momentum bars | 30 | 30 | Backtest |
-| Reversal hold | 20 bars | 20 bars | Backtest |
-| OI history len | 60 bars | 60 bars | Backtest VELOCITY_WINDOW |
-
----
-
-## Backtest Results (Jan–Apr 2026)
-
-### NIFTY (LOT=65)
-- Trading days: 64 | Trades: 22 | Win rate: 68.2%
-- Total P&L: ₹26,722 | Avg/trade: ₹1,215
-- Win/Loss ratio: 1.03x | Max win: ₹9,058 | Max loss: ₹-5,379
-
-### BANKNIFTY (LOT=30)
-- Trading days: 33 | Trades: 8 | Win rate: 75.0%
-- Total P&L: ₹27,874 | Avg/trade: ₹3,484
-- Win/Loss ratio: 2.89x | Max win: (single TP trade at ₹9,930)
-
-### Combined
-- Total P&L: **₹54,596** across 30 trades
-
----
-
-## Remaining Known Gaps (May 2026)
-
-| Gap | Severity | Note |
-|-----|----------|------|
-| Entry execution timing | INFO | Runner enters current bar; backtest simulates next-bar fill. ~1 min slippage. Intentional. |
-| Score gate (0.35 global) | LOW | Runner has global 0.35 floor; backtest only conditional. Runner is more conservative — acceptable. |
-| alert_runner.py isolation | HIGH | Never run alongside restart_runners.sh. Document this clearly before any deployment. |
-| End-to-end verification | VERIFY | No paper trade has fired post-fixes. Verify full entry→position→exit→alert chain on next signal. |
-
----
-
-## Logging
-
-Each runner writes to its own log file via `logging.FileHandler` (append mode):
-- `v3/live/runner.log` — NIFTY
-- `v3/live/runner_banknifty.log` — BANKNIFTY
-
-`restart_runners.sh` launches with `> /dev/null 2>&1 &` to discard stdout/stderr — prevents duplicate lines from FileHandler + StreamHandler both writing to the same file.
-
----
-
-## Classifier Details
-
-Three FIIDIIClassifier instances run on BankNifty runner (one on Nifty runner):
-
-| Classifier | Threshold File | Role |
-|-----------|---------------|------|
-| BN-primary | `fii_dii_thresholds_BANKNIFTY.json` | Drives F3 block |
-| Combined | `fii_dii_thresholds_COMBINED.json` | Reference only |
-| Nifty-ref | `fii_dii_thresholds.json` | Cross-reference |
-
-Classifier becomes non-UNKNOWN after MIN_WINDOW=5 bars (~5 minutes post-start). Returns dict always (never None); attribution='UNKNOWN' when insufficient data.
-
----
-
-## Telegram Alerts
-
-Sent by runners on: entry signal, position update (every N bars), EOD exit, SL/TP/reversal exit. Config in `token.env`: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS` (comma-separated for multiple recipients).
+The signal-daemon is best-effort: if Groww auth fails or the cache stops
+updating, it will silently emit nothing. A heartbeat alert (every hour
+"daemon alive, last bar = …") would close that gap.

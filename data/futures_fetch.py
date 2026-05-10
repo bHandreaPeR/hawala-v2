@@ -40,6 +40,7 @@ def fetch_futures_rolling(instrument: str,
 
     cfg               = INSTRUMENTS[instrument]
     underlying_symbol = cfg['underlying_symbol']
+    exchange          = cfg.get('exchange', 'NSE')   # 'BSE' for SENSEX, 'NSE' for all others
 
     print(f"\nFetching {instrument} FUTURES data {start_date} → {end_date}...")
 
@@ -52,6 +53,7 @@ def fetch_futures_rolling(instrument: str,
         groww             = groww,
         roll_days_before  = 1,
         futures_only      = True,
+        exchange          = exchange,
     )
 
     if not calendar:
@@ -86,9 +88,11 @@ def fetch_futures_rolling(instrument: str,
         _seg_fno = getattr(groww, 'SEGMENT_FNO',
                    getattr(groww, 'SEGMENT_FO', 'FNO'))
 
+        _exch_const = (getattr(groww, 'EXCHANGE_BSE', 'BSE')
+                       if exchange == 'BSE' else groww.EXCHANGE_NSE)
         try:
             result = groww.get_historical_candles(
-                exchange        = groww.EXCHANGE_NSE,
+                exchange        = _exch_const,
                 segment         = _seg_fno,
                 groww_symbol    = symbol,
                 start_time      = period_start,

@@ -192,6 +192,40 @@ def build_weekly_report() -> str:
     return '\n'.join(lines)
 
 
+def _run_weekly_backfill() -> None:
+    """
+    Backfill OI for expired futures contracts after the weekly report is sent.
+    Groww returns OI only for expired contracts (7-col response). Re-fetching
+    dates that were in the active-contract window at the time of daily_fetch
+    recovers the missing OI once the contract has rolled off.
+    Runs inline here so the TOTP / Groww session is already warm.
+    """
+    import subprocess
+    _project_root = pathlib.Path(__file__).parent
+    _script = _project_root / "v3" / "data" / "backfill_expired_contracts.py"
+    if not _script.exists():
+        print(f"⚠  Backfill script not found at {_script} — skipping")
+        return
+    print("\n" + "─" * 55)
+    print("  Weekly OI backfill (expired contracts)")
+    print("─" * 55)
+    try:
+        result = subprocess.run(
+            ["python3", str(_script), "--instrument", "ALL"],
+            cwd=str(_project_root),
+            capture_output=False,
+            timeout=600,     # 10 min hard limit
+        )
+        if result.returncode != 0:
+            print(f"  ⚠  Backfill exited with code {result.returncode} — check logs")
+        else:
+            print("  ✅ Backfill complete")
+    except subprocess.TimeoutExpired:
+        print("  ⚠  Backfill timed out after 10 min — will retry next week")
+    except Exception as e:
+        print(f"  ⚠  Backfill error: {e}")
+
+
 def main():
     print("📋 Generating weekly report...")
     report = build_weekly_report()
@@ -199,12 +233,14 @@ def main():
 
     if not (TG_TOKEN and TG_CHAT_IDS):
         print("\n⚠  Telegram not configured — printing only.")
-        return
+    else:
+        from alerts.telegram import send
+        for chat_id in TG_CHAT_IDS:
+            send(TG_TOKEN, chat_id, report)
+        print("\n✅ Weekly report sent via Telegram.")
 
-    from alerts.telegram import send
-    for chat_id in TG_CHAT_IDS:
-        send(TG_TOKEN, chat_id, report)
-    print("\n✅ Weekly report sent via Telegram.")
+    # ── Post-report: backfill expired contract OI ─────────────────────────────
+    _run_weekly_backfill()
 
 
 if __name__ == '__main__':

@@ -41,6 +41,17 @@ import numpy as np
 import pandas as pd
 from scipy.stats import norm
 
+# Historical lot-size lookup (avoids import cycle — inline copy of backtest/engine.py logic)
+def _lot_size_for_date(trade_date, instrument_config: dict) -> int:
+    """Return the correct lot size for a given trade date from lot_size_history."""
+    history = instrument_config.get('lot_size_history', [])
+    for start_s, end_s, size in history:
+        start_d = pd.Timestamp(start_s).date()
+        end_d   = pd.Timestamp(end_s).date()
+        if start_d <= trade_date <= end_d:
+            return size
+    return instrument_config.get('lot_size', 30)  # fallback to current
+
 # ── Black-Scholes helpers (backtest proxy) ────────────────────────────────────
 
 _RISK_FREE = 0.065        # Indian risk-free rate
@@ -151,11 +162,13 @@ def _conviction_lots(vix: float, net_credit: float, wing_width: int,
     lot_min = int(p.get('IC_LOT_MIN',  1))
 
     if equity > 0:
-        # Capital-aware: size by risk budget
-        risk_pct      = float(p.get('IC_RISK_PER_TRADE_PCT', 0.05))
-        max_loss_pts  = wing_width - net_credit
-        margin_1lot   = max(max_loss_pts * lot_size, 1)
-        raw           = (equity * risk_pct * scalar) / margin_1lot
+        # Capital-aware: size by risk budget.
+        # Use wing_width * lot_size as margin proxy — this is what the exchange
+        # holds regardless of credit received. (wing_width - net_credit) * lot_size
+        # approaches 0 when credit ≈ spread width, causing massive lot inflation.
+        risk_pct    = float(p.get('IC_RISK_PER_TRADE_PCT', 0.05))
+        margin_1lot = wing_width * lot_size          # e.g. 300 × 30 = 9,000
+        raw         = (equity * risk_pct * scalar) / margin_1lot
         return max(lot_min, min(int(raw), lot_max))
     else:
         # Fallback for backtest sweep mode (no equity tracking):
@@ -266,7 +279,7 @@ def run_iron_condor(
     IC_MIN_CREDIT  = float(p.get('IC_MIN_NET_CREDIT', 50.0))
     IC_MARGIN_CAP  = float(p.get('IC_MARGIN_CAP_PCT', 0.60))
 
-    lot_size       = instrument_config['lot_size']
+    lot_size       = instrument_config['lot_size']   # current (fallback)
     strike_interval= instrument_config.get('strike_interval', 100)
     brokerage      = instrument_config.get('brokerage', 40)
     underlying     = instrument_config.get('underlying_symbol', 'BANKNIFTY')
@@ -321,6 +334,9 @@ def run_iron_condor(
             if expiry_date_live is None or expiry_date_live != today:
                 continue
             expiry_date = expiry_date_live
+
+        # ── Per-date lot size (corrects for SEBI lot size changes in backtest) ─
+        lot_size = _lot_size_for_date(today, instrument_config)
 
         # ── ATR14 ────────────────────────────────────────────────────────────
         atr14 = _atr14(data, today)

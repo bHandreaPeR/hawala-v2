@@ -1,0 +1,188 @@
+# Event-class keyword dictionary.
+#
+# Each class:
+#   direction      : -1 (bearish for NIFTY) or +1 (bullish for NIFTY)
+#   base_magnitude : 0..1 (base impact)
+#   triggers       : groups of phrases (lower-case, multi-word OK).
+#                    Match if any phrase appears as a substring in the
+#                    normalized headline.
+#   region_boost   : optional. Multiplier when a region keyword is present.
+#                    Best match wins; default 1.0.
+#   negation_blockers : list of token-pair lists. If BOTH tokens of a pair
+#                       appear within 6 tokens of each other, the match is
+#                       suppressed. e.g. [ceasefire, broken] kills "ceasefire
+#                       broken as fighting resumes".
+#
+# corporate_india_megacap is special: direction is dynamic (set by
+# positive_triggers vs negative_triggers).
+
+geopolitical_deescalation:
+  direction: +1
+  base_magnitude: 0.6
+  triggers:
+    peace:     [peace deal, peace pact, peace agreement, peace treaty, peace breakthrough, peace plan, peace accord, peace hopes, peace optimism, peace progress, peace talk, peace process, peace framework, peace memo, hopes of peace, hopes for peace]
+    ceasefire: [ceasefire, cease-fire, truce, armistice, stop fighting, halt hostilities, end of hostilities, lay down arms, cease hostilities, halt fighting, end fighting, end the war, end the conflict, end war, ending the war, ending hostilities, hostilities end, war ends, war over]
+    sanctions: [sanctions lifted, sanctions removed, sanctions eased, sanctions relief, sanctions waived, ease sanctions, lift sanctions, remove sanctions, ease restrictions, drop sanctions, suspend sanctions, sanctions suspended]
+    talks:     [talks resume, dialogue resumed, negotiations breakthrough, agreement reached, deal reached, deal signed, breakthrough talks, deal closer, closer to deal, closing in on deal, closing in on agreement, closing in on memo, near deal, near agreement, nearing deal, nearing agreement, move closer to deal, moving closer to deal, move closer to agreement, deal in sight, deal imminent, agreement imminent, memo to end, memo to end war, one-page memo, framework deal, mou signed, sign mou, draft deal, draft agreement]
+    withdrawal: [troops withdraw, troop pullout, military withdrawal, troops pull out, withdraw forces, pull back troops, retreat forces, military pullback]
+    diplomacy: [normalize relations, restore ties, resume diplomatic, diplomatic breakthrough, diplomatic progress, diplomatic resolution, talks progress, progress on deal, progress on talks, progress on peace, suspends operation, halts operation, suspended operations]
+    de_risk:   [tensions ease, tension eases, tensions cool, conflict de-escalates, de-escalation, deescalation, war risk eases, geopolitical risk eases]
+  region_boost:
+    iran: 1.3
+    russia: 1.1
+    ukraine: 1.1
+    china: 1.0
+    korea: 0.9
+    israel: 1.2
+    middle east: 1.2
+    gaza: 1.1
+    hormuz: 1.3
+  negation_blockers:
+    - [peace, fails]
+    - [peace, collapse]
+    - [peace, rejected]
+    - [ceasefire, broken]
+    - [ceasefire, violated]
+    - [ceasefire, collapsed]
+    - [ceasefire, rejected]
+    - [sanctions, expanded]
+    - [sanctions, imposed]
+    - [talks, collapse]
+    - [talks, fail]
+
+geopolitical_escalation:
+  direction: -1
+  base_magnitude: 0.7
+  triggers:
+    military:    [airstrike, air strike, missile strike, missile attack, missiles fired, drone strike, bombing, bombs, invasion, invades, ground offensive, military strike, retaliatory strike, resumes strikes, resume strikes, launches strike, launches strikes, attack on, attacks on, troops cross, ground assault, troops killed, soldiers killed, civilian casualties, war intensifies, fighting intensifies, escalates strikes, strikes escalate, strikes intensify, heavy bombing, heavier bombing, more bombing, fires on, fires at, fired upon, fired on, opens fire, gunfire on, struck iranian, struck iran, hits iranian, attacks iranian, strikes iranian, bombs iranian, us fires, us strikes, us attacks, israel strikes, israel attacks, exchanges fire, returns fire, kills iranian, killed iranian, military action, military operation, military intervention]
+    declaration: [declares war, war declared, mobilization, state of emergency, martial law, mobilizes troops, threatens war, threatens military action]
+    blockade:    [blockade, naval blockade, no-fly zone, closure of strait, strait of hormuz closed, port shut, hormuz closure, hormuz disruption, shipping halt, port closed]
+    nuclear:     [nuclear test, nuclear threat, nuclear escalation, nuclear strike, nuclear weapon test, missile test, ballistic missile test, icbm test, nuclear program advance]
+    sanctions:   [new sanctions, sanctions imposed, sanctions expanded, additional sanctions, secondary sanctions, sanctions tightened, blacklist expanded]
+    cyber:       [cyberattack, cyber attack, cyber strike, ransomware attack on, infrastructure cyberattack]
+    hostage:     [hostage crisis, hostages taken, ship seized, ship hijacked, tanker seized, tanker attacked, tanker hit]
+    war_warn:    [war risk rises, war risk climbs, war fears, war fear, geopolitical risk rises, geopolitical risk surges, conflict risk, escalation risk, war windfall, war oil windfall, war drains, war roils, iran war, iran-us war, us-iran war, israel-iran war, ongoing war, war boosts, war drives, war disruption, war pressures]
+    talks_fail:  [talks collapse, talks collapsed, peace talks collapse, peace talks fail, peace talks failed, talks fail, talks fall through, talks impasse, peace talks impasse, no deal reached, deal collapses, ceasefire collapses, ceasefire violated, ceasefire broken, peace deal collapses, peace deal fails, talks hit a wall, negotiations break down, talks break down, marathon talks fail]
+  region_boost:
+    iran: 1.3
+    israel: 1.2
+    russia: 1.1
+    ukraine: 1.1
+    taiwan: 1.2
+    china: 1.1
+    korea: 1.0
+    middle east: 1.2
+    hormuz: 1.4
+    gaza: 1.1
+  negation_blockers:
+    - [missile, intercepted, no casualties]
+    - [strike, averted]
+    - [attack, foiled]
+    - [strike, no damage]
+
+monetary_dovish:
+  direction: +1
+  base_magnitude: 0.8
+  triggers:
+    fed:      [fed cuts rates, fed rate cut, fomc cuts, dovish fed, fed pivot, fed pauses, fed signals cut, powell dovish, fed eases, fed easing, rate cut, cuts rates, cut rates, slashes rates, slash rates, cuts interest rate, cut interest rate, fed lowers rates, lowers rates, lower rates, fed delivers cut, surprise rate cut, surprise cut]
+    rbi:      [rbi cuts, rbi repo cut, rbi dovish, rbi pause, mpc cuts, rbi rate cut, das dovish, rbi lowers, rbi slashes, repo rate cut, repo cut]
+    ecb_boj:  [ecb cuts, boj dovish, boe cuts, ecb pivot, lagarde dovish, ecb rate cut, boe rate cut]
+    qe:       [quantitative easing, asset purchase, balance sheet expansion, qe restart, restart qe, liquidity injection, liquidity boost]
+    rhetoric: [dovish, easing cycle, accommodative, supportive policy, rate cut bets, rate cut hopes, rate cut expected, rate cut likely, cut bets rise, dovish surprise, dovish tilt, more cuts ahead]
+    cpi_soft: [cpi cools, inflation cools, inflation slows, cpi softer, soft inflation, lower than expected inflation, inflation eases, cooler inflation, inflation below forecast, cpi miss]
+  region_boost:
+    rbi: 1.5
+    india: 1.5
+    fed: 1.2
+    us: 1.2
+    ecb: 0.8
+  negation_blockers:
+    - [no rate cut]
+    - [rate cut, ruled out]
+    - [rate cut, denied]
+    - [rate cut, rejected]
+    - [dovish, dismissed]
+
+monetary_hawkish:
+  direction: -1
+  base_magnitude: 0.7
+  triggers:
+    fed:      [fed hikes, fed rate hike, fomc hikes, hawkish fed, fed accelerates, fed signals hike, powell hawkish, fed tightens, rate hike, raises rates, hikes rates, hike rates, fed raises, fed delivers hike, surprise rate hike, surprise hike, jumbo rate hike]
+    rbi:      [rbi hikes, rbi repo hike, rbi hawkish, mpc hikes, das hawkish, repo rate hike, repo hike, rbi raises]
+    rhetoric: [hawkish, tightening, restrictive policy, higher for longer, rate hike bets, jumbo hike, hawkish surprise, hawkish tilt, more hikes ahead, sticky higher rates]
+    cpi_hot:  [cpi hot, inflation surges, sticky inflation, hotter than expected inflation, cpi hotter, inflation jumps, inflation accelerates, hot cpi, inflation above forecast]
+  region_boost:
+    rbi: 1.5
+    india: 1.5
+    fed: 1.2
+    us: 1.2
+  negation_blockers:
+    - [no rate hike]
+    - [rate hike, ruled out]
+    - [rate hike, paused]
+
+oil_spike:
+  direction: -1
+  base_magnitude: 0.5
+  triggers:
+    price:     [oil surges, oil jumps, crude rallies, brent spikes, wti jumps, crude surge, oil soars, oil rallies, brent surges, oil up sharply, oil sharply higher, crude jumps, crude soars, oil shoots up, oil price spike, brent rallies, oil rebounds, crude rebounds, brent rebounds, oil bounces, crude bounces, oil rises sharply, oil up 5, oil up sharply, oil higher on war, war boosts oil, war drives oil, war boosts trading]
+    supply:    [opec cuts output, opec production cut, supply shock, refinery fire, pipeline attack, output cut deepens, opec extends cuts, opec deeper cut, output curtailment, hormuz closure, hormuz blocked, strait of hormuz blocked, fuel exports plunge]
+    threshold: [oil above $100, oil tops $90, oil tops $100, brent breaches $100, brent above $100, oil hits $100, oil crosses $100, oil crosses 100, brent above $110, oil above $110]
+    geo_oil:   [tanker attacked, tanker seized, oil tanker, hormuz disruption, tanker hijacked, refinery hit, oil pipeline attacked, fires on tanker, fires on iranian oil, us fires on, struck oil tanker, hits oil tanker, attack on tanker]
+
+oil_crash:
+  direction: +1
+  base_magnitude: 0.4
+  triggers:
+    price:  [oil plunges, crude tumbles, brent slides, wti crashes, oil drops, oil slumps, oil sinks, brent tumbles, oil falls, crude falls, oil tumbles, oil crashes, oil sharply lower, oil down sharply, lower circuit on oil, oil hits lower circuit, oil dive, oil dives, oil down 5, oil fall toward, oil falls toward, oil falls towards, oil fall towards, fall towards $100, brent falls, brent drops, wti falls, wti drops, oil retreats, crude retreats, oil pulls back, brent pulls back, 8% crash in oil, oil crash, brent crash]
+    supply: [opec increases output, opec hikes production, supply glut, opec raises output, output increase, output hike, opec adds barrels, hormuz reopened, hormuz reopens, strait of hormuz reopened, hormuz open to all, reopening of hormuz, reopening the strait, reopening hormuz]
+    optimism: [oil down on peace, oil slides on peace, oil falls on talks, oil dives on talks, oil dives on peace, oil slides on talks, brent falls on peace, oil down on deal, oil falls on deal, oil down on diplomacy, oil slides on us-iran deal optimism, oil drops on iran deal]
+
+trade_escalation:
+  direction: -1
+  base_magnitude: 0.5
+  triggers:
+    tariff:      [new tariff, tariff hike, tariff imposed, raises tariffs, tariffs hiked, tariff increased]
+    trade_war:   [trade war, retaliation tariff, retaliatory tariff, tit-for-tat tariff]
+    export_curb: [export ban, export controls, chip ban, export restrictions, blacklist]
+
+trade_deescalation:
+  direction: +1
+  base_magnitude: 0.4
+  triggers:
+    rollback:  [tariff rollback, tariff pause, tariff lifted, trade deal, tariff suspended, tariff cut]
+    agreement: [trade agreement, trade pact signed, trade truce, trade detente]
+
+financial_crisis:
+  direction: -1
+  base_magnitude: 0.9
+  triggers:
+    default: [sovereign default, debt default, default risk, contagion, debt crisis]
+    banking: [bank run, bank collapse, banking crisis, bank fails, bank rescue, bailout]
+    market:  [circuit breaker, market halt, flash crash, rout, panic selling, blood on the street]
+
+india_macro_positive:
+  direction: +1
+  base_magnitude: 0.5
+  triggers:
+    growth:    [india gdp beats, india gdp upgrade, moody's upgrades india, fitch upgrades india, sp upgrades india, india rating upgrade, india growth surprise]
+    flows:     [fii inflow, fii buying, dii buying surges, record inflow, foreign inflow, foreign buying]
+    reform:    [fdi liberalized, gst cut, capex push, infra push, monsoon normal, monsoon surplus]
+    monsoon:   [monsoon above normal, good monsoon, normal monsoon]
+
+india_macro_negative:
+  direction: -1
+  base_magnitude: 0.5
+  triggers:
+    flows:     [fii outflow, fii selling, fii dumps, foreign selling, foreign outflow, dii selling]
+    downgrade: [moody's downgrades india, fitch downgrades india, sp downgrades india, india rating downgrade]
+    fiscal:    [fiscal slippage, deficit widens, current account deficit widens, cad widens]
+    monsoon:   [monsoon deficit, drought, weak monsoon, monsoon below normal]
+
+corporate_india_megacap:
+  # Direction is dynamic — only fires if entity is present AND positive/negative trigger present.
+  direction_dynamic: true
+  base_magnitude: 0.4
+  entities: [reliance, hdfc bank, icici bank, sbi, infosys, tcs, bharti airtel, kotak, axis bank, larsen, l&t, hindustan unilever, itc, bajaj finance, asian paints, maruti, sun pharma]
+  positive_triggers: [beats estimates, profit jumps, guidance raised, dividend hike, buyback, profit surges, record profit, beats forecast]
+  negative_triggers: [misses estimates, profit falls, guidance cut, fraud, regulatory action, ceo resigns, profit drops, sebi probe, ed raid, raids on]

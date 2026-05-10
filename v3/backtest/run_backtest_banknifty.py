@@ -15,7 +15,7 @@ Trade logic (real-time bar-by-bar):
       EOD      → 15:20 square-off (fallback to last available bar)
   - One trade per day — no re-entry after exit.
   - N/A suppression: no trade if velocity=0 AND classifier=None (pure lag-1, no live OI).
-  - PnL = (exit_close - entry_close) × 75  [Nifty lot size = 75 units]
+  - PnL = (exit_close - entry_close) × 30  [BankNifty lot size = 30 units]
 
 Data sources (all lag-1 / no lookahead):
   - 1m futures candles:        v3/cache/candles_1m_BANKNIFTY.pkl

@@ -36,7 +36,7 @@ BankNifty-specific constants vs Nifty runner:
   Entry bar = 105 min after 9:15 = 11:00 AM
   EOD exit = 15:20                            (matches backtest EOD_EXIT_HHMM)
   Last entry = 13:00
-  Expiry = last Thursday of month             (Nifty = last Tuesday)
+  Expiry = last Tuesday of month              (same as Nifty — NSE post-2024 change)
 
 Paper trade mode (default): logs trades without placing orders.
 Set --live (and confirm risk) for real order placement.
@@ -64,7 +64,7 @@ logging.basicConfig(
     format='%(asctime)s %(levelname)s %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(ROOT / 'v3' / 'live' / 'runner_banknifty.log', mode='a'),
+        logging.FileHandler(ROOT / 'logs' / 'trade_bot' / 'runner_banknifty.log', mode='a'),
     ]
 )
 log = logging.getLogger('live_runner_banknifty')
@@ -224,7 +224,7 @@ def _fmt_morning_alert(
         f"20d Vol: <b>{vol:.3f}%</b>  |  5d Regime: {regime_flag}\n"
         f"FII/DII classifiers:\n" + '\n'.join(clf_lines) + '\n'
         f"SL: –50%  |  TP: +100%\n"
-        f"Entry window: 11:00 → 13:00  |  EOD: 15:15"
+        f"Entry window: 11:00 → 13:00  |  EOD: 15:20"
     )
 
 
@@ -316,7 +316,7 @@ def _fmt_exit_alert(
     reason_map = {
         'SL':       '🛑 Stop Loss hit (–50%)',
         'TP':       '🎯 Take Profit hit (+100%)',
-        'EOD':      '🕥 EOD exit (15:15)',
+        'EOD':      '🕥 EOD exit (15:20)',
         'REVERSAL': '🔄 Signal reversal',
     }
     reason_str = reason_map.get(exit_reason, exit_reason)
@@ -406,6 +406,15 @@ def _fetch_option_chain(g, expiry: date) -> Optional[dict]:
 
     if not raw_strikes:
         log.warning("get_option_chain returned empty strikes: expiry=%s response_keys=%s", exp_str, list(r.keys()) if r else None)
+        return None
+
+    # Defensive: Groww historically returned a list; current format is dict[str_strike→data].
+    # If a list arrives (API regression or partial response), log and bail rather than crash.
+    if not isinstance(raw_strikes, dict):
+        log.warning(
+            "get_option_chain: unexpected strikes type: expiry=%s type=%s — skipping bar",
+            exp_str, type(raw_strikes).__name__,
+        )
         return None
 
     ce_oi: dict  = {}
@@ -847,7 +856,7 @@ def _load_static_inputs(today: date) -> dict:
         except Exception as e:
             log.warning("regime filter: could not compute 5d return: %s", e)
 
-    # DTE (approximate — to next Thursday)
+    # DTE (approximate — to next Tuesday expiry)
     try:
         expiry_approx = _nearest_tuesday_expiry(today)
         dte = max((expiry_approx - today).days, 1)
@@ -1195,7 +1204,7 @@ def run(paper: bool = True):
     market_open  = now.replace(hour=9,  minute=15, second=0, microsecond=0)
 
     if now > exit_target:
-        log.error("Started after exit time (15:15). Nothing to do today.")
+        log.error("Started after exit time (15:20). Nothing to do today.")
         return
 
     # ── Real-time state objects ────────────────────────────────────────────────
@@ -1732,7 +1741,7 @@ def run(paper: bool = True):
                     time.sleep(60)
                     continue
 
-            # EOD exit at 15:15
+            # EOD exit at 15:20
             if now >= exit_target:
                 exit_reason = 'EOD'
                 result_str  = 'WIN' if pnl_pts > 0 else 'LOSS'

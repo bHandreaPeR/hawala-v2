@@ -1,0 +1,31 @@
+event_ts,instrument,ret_bps,dir,atr_ratio,n_news_in_win,n_scored,top_event_class,top_score,top_headline,top_lag_sec,match
+2025-11-07 13:26,NIFTY,17.6,+,18.9,54,8,geopolitical_deescalation,0.46,"One month into Gaza ceasefire, what does Palestinians’ future look like? - openDemocracy",-240,MATCH
+2025-11-14 15:00,NIFTY,19.9,+,11.3,0,0,,0.0,,,NO_NEWS
+2025-12-05 10:04,BANKNIFTY,23.3,+,6.5,1,0,,0.0,,,NO_NEWS
+2026-01-12 12:21,BANKNIFTY,24.9,+,5.2,0,0,,0.0,,,NO_NEWS
+2026-01-21 10:54,BANKNIFTY,27.5,-,5.7,0,0,,0.0,,,NO_NEWS
+2026-01-21 13:10,NIFTY,18.9,-,5.4,55,12,financial_crisis,-0.63,"Sensex, Nifty fall further today after sharp rout; Wall Street sell-off, trade war fears keep downsi",-1200,MATCH
+2026-01-21 14:17,NIFTY,20.7,+,9.1,55,12,financial_crisis,-0.63,"Sensex, Nifty fall further today after sharp rout; Wall Street sell-off, trade war fears keep downsi",2820,MISMATCH
+2026-01-23 13:30,BANKNIFTY,23.7,-,7.4,69,4,monetary_dovish,0.67,Fed Rate Cuts Create Opening for Mid-Cap Stocks,0,MISMATCH
+2026-01-27 09:38,NIFTY,24.2,+,3.9,1,0,,0.0,,,NO_NEWS
+2026-01-30 14:47,NIFTY,17.7,+,4.2,1,0,,0.0,,,NO_NEWS
+2026-02-02 09:58,NIFTY,18.2,-,6.3,0,0,,0.0,,,NO_NEWS
+2026-02-27 15:00,NIFTY,24.8,-,19.9,0,0,,0.0,,,NO_NEWS
+2026-03-02 14:03,NIFTY,27.1,+,11.9,70,12,monetary_dovish,0.7,OPINION | Desperately Seeking Deposits: India liquidity tight despite RBI rate cuts,1980,MATCH
+2026-03-02 14:47,NIFTY,22.4,+,4.8,0,0,,0.0,,,NO_NEWS
+2026-03-06 14:48,NIFTY,28.5,-,6.2,0,0,,0.0,,,NO_NEWS
+2026-03-09 09:30,BANKNIFTY,26.9,+,3.7,0,0,,0.0,,,NO_NEWS
+2026-03-09 10:50,BANKNIFTY,21.3,+,13.2,0,0,,0.0,,,NO_NEWS
+2026-03-09 10:51,BANKNIFTY,35.9,+,6.1,0,0,,0.0,,,NO_NEWS
+2026-03-09 13:33,BANKNIFTY,20.7,+,7.2,0,0,,0.0,,,NO_NEWS
+2026-03-12 11:18,BANKNIFTY,32.4,-,14.2,0,0,,0.0,,,NO_NEWS
+2026-03-12 14:50,BANKNIFTY,20.6,-,4.6,0,0,,0.0,,,NO_NEWS
+2026-03-16 10:20,NIFTY,19.3,-,4.0,0,0,,0.0,,,NO_NEWS
+2026-03-16 10:30,BANKNIFTY,21.9,+,5.5,0,0,,0.0,,,NO_NEWS
+2026-03-16 14:11,BANKNIFTY,26.3,+,8.4,0,0,,0.0,,,NO_NEWS
+2026-03-16 14:18,BANKNIFTY,28.1,+,6.6,0,0,,0.0,,,NO_NEWS
+2026-03-16 15:06,NIFTY,22.3,+,4.4,0,0,,0.0,,,NO_NEWS
+2026-03-17 14:16,NIFTY,17.9,-,5.3,1,0,,0.0,,,NO_NEWS
+2026-03-19 11:14,BANKNIFTY,20.5,-,6.7,0,0,,0.0,,,NO_NEWS
+2026-03-19 14:44,BANKNIFTY,21.0,+,8.6,0,0,,0.0,,,NO_NEWS
+2026-03-19 14:55,BANKNIFTY,30.9,-,8.4,0,0,,0.0,,,NO_NEWS

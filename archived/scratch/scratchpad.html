@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hawala v2 — Scratchpad</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f1117;
+      color: #e4e8f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    header {
+      background: #141720;
+      border-bottom: 1px solid #2a2f42;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .logo { font-size: 15px; font-weight: 700; color: #6366f1; letter-spacing: -0.3px; }
+    .logo span { color: #a5b4fc; font-weight: 400; }
+    .header-right { display: flex; align-items: center; gap: 10px; }
+    #save-status { font-size: 11px; color: #6b7280; transition: color 0.3s; }
+    #save-status.saved { color: #22c55e; }
+
+    /* Input area */
+    .input-row {
+      display: flex;
+      gap: 8px;
+      padding: 16px 24px 0;
+      align-items: flex-start;
+    }
+    #new-note {
+      flex: 1;
+      background: #1c2030;
+      border: 1px solid #2a2f42;
+      border-radius: 8px;
+      padding: 12px 14px;
+      color: #e4e8f0;
+      font-size: 14px;
+      line-height: 1.5;
+      resize: vertical;
+      min-height: 80px;
+      outline: none;
+      transition: border-color 0.2s;
+      font-family: inherit;
+    }
+    #new-note:focus { border-color: #6366f1; }
+    #new-note::placeholder { color: #4b5563; }
+
+    .btn {
+      background: #6366f1;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: #4f46e5; }
+    .btn-sm {
+      background: #1c2030;
+      border: 1px solid #2a2f42;
+      color: #9ca3af;
+      padding: 5px 10px;
+      font-size: 11px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-sm:hover { background: #2a2f42; color: #e4e8f0; }
+    .btn-sm.danger:hover { background: #ef444420; color: #ef4444; border-color: #ef4444; }
+
+    /* Tag filter bar */
+    .filter-bar {
+      display: flex;
+      gap: 6px;
+      padding: 12px 24px 0;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .filter-label { font-size: 11px; color: #6b7280; margin-right: 4px; }
+    .tag-btn {
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .tag-btn.active { border-color: currentColor; }
+
+    /* Notes list */
+    .notes-container {
+      flex: 1;
+      padding: 16px 24px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+    }
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #4b5563;
+      gap: 8px;
+      padding: 60px 0;
+    }
+    .empty-state .icon { font-size: 36px; }
+    .empty-state p { font-size: 14px; }
+
+    /* Note card */
+    .note-card {
+      background: #141720;
+      border: 1px solid #2a2f42;
+      border-radius: 10px;
+      padding: 14px 16px;
+      transition: border-color 0.15s;
+      position: relative;
+    }
+    .note-card:hover { border-color: #3b4260; }
+    .note-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .note-time { font-size: 11px; color: #6b7280; }
+    .note-tag-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .note-actions {
+      position: absolute;
+      top: 10px;
+      right: 12px;
+      display: flex;
+      gap: 4px;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .note-card:hover .note-actions { opacity: 1; }
+    .note-body {
+      font-size: 13.5px;
+      line-height: 1.6;
+      color: #cbd5e1;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .note-body.editing {
+      background: #0f1117;
+      border: 1px solid #6366f1;
+      border-radius: 6px;
+      padding: 8px;
+      outline: none;
+      width: 100%;
+      min-height: 60px;
+      resize: vertical;
+      font-family: inherit;
+      font-size: 13.5px;
+      color: #e4e8f0;
+    }
+
+    /* Tag colors */
+    .tag-idea    { background: #6366f120; color: #a5b4fc; }
+    .tag-trade   { background: #22c55e20; color: #86efac; }
+    .tag-risk    { background: #ef444420; color: #fca5a5; }
+    .tag-macro   { background: #f59e0b20; color: #fcd34d; }
+    .tag-todo    { background: #3b82f620; color: #93c5fd; }
+    .tag-general { background: #6b728020; color: #9ca3af; }
+
+    /* Search */
+    #search {
+      background: #1c2030;
+      border: 1px solid #2a2f42;
+      border-radius: 6px;
+      padding: 6px 12px;
+      color: #e4e8f0;
+      font-size: 12px;
+      outline: none;
+      width: 200px;
+      transition: border-color 0.2s;
+    }
+    #search:focus { border-color: #6366f1; }
+    #search::placeholder { color: #4b5563; }
+
+    /* Tag selector */
+    #tag-select {
+      background: #1c2030;
+      border: 1px solid #2a2f42;
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: #9ca3af;
+      font-size: 12px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .count-badge {
+      font-size: 11px;
+      color: #6b7280;
+      margin-left: auto;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Hawala <span>v2</span> — Scratchpad</div>
+  <div class="header-right">
+    <input type="text" id="search" placeholder="Search notes..." oninput="renderNotes()" />
+    <span id="save-status">auto-saved</span>
+  </div>
+</header>
+
+<div class="input-row">
+  <textarea id="new-note" placeholder="Add a thought, idea, trade observation, or reminder…" onkeydown="handleKey(event)"></textarea>
+  <div style="display:flex;flex-direction:column;gap:6px;">
+    <select id="tag-select">
+      <option value="general">General</option>
+      <option value="idea">💡 Idea</option>
+      <option value="trade">📈 Trade</option>
+      <option value="risk">⚠️ Risk</option>
+      <option value="macro">🌍 Macro</option>
+      <option value="todo">✅ Todo</option>
+    </select>
+    <button class="btn" onclick="addNote()">Add Note</button>
+    <span style="font-size:10px;color:#4b5563;text-align:center">Ctrl+Enter</span>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <span class="filter-label">Filter:</span>
+  <button class="tag-btn tag-general active" onclick="setFilter('all')" data-filter="all" style="color:#9ca3af;border-color:#9ca3af">All</button>
+  <button class="tag-btn tag-idea" onclick="setFilter('idea')" data-filter="idea">💡 Idea</button>
+  <button class="tag-btn tag-trade" onclick="setFilter('trade')" data-filter="trade">📈 Trade</button>
+  <button class="tag-btn tag-risk" onclick="setFilter('risk')" data-filter="risk">⚠️ Risk</button>
+  <button class="tag-btn tag-macro" onclick="setFilter('macro')" data-filter="macro">🌍 Macro</button>
+  <button class="tag-btn tag-todo" onclick="setFilter('todo')" data-filter="todo">✅ Todo</button>
+  <span class="count-badge" id="count-badge"></span>
+</div>
+
+<div class="notes-container" id="notes-container"></div>
+
+<script>
+  let notes = [];
+  let activeFilter = 'all';
+  const STORAGE_KEY = 'hawala_v2_scratchpad';
+
+  // ── Load from localStorage ──────────────────────────────────────────────
+  function load() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      notes = raw ? JSON.parse(raw) : [];
+    } catch(e) { notes = []; }
+    renderNotes();
+  }
+
+  function save() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
+    const el = document.getElementById('save-status');
+    el.textContent = 'saved ✓';
+    el.className = 'saved';
+    setTimeout(() => { el.textContent = 'auto-saved'; el.className = ''; }, 1500);
+  }
+
+  // ── Add note ────────────────────────────────────────────────────────────
+  function addNote() {
+    const txt = document.getElementById('new-note').value.trim();
+    if (!txt) return;
+    const tag = document.getElementById('tag-select').value;
+    notes.unshift({
+      id:   Date.now(),
+      text: txt,
+      tag:  tag,
+      ts:   new Date().toISOString(),
+    });
+    document.getElementById('new-note').value = '';
+    save();
+    renderNotes();
+  }
+
+  function handleKey(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); addNote(); }
+  }
+
+  // ── Filter ──────────────────────────────────────────────────────────────
+  function setFilter(f) {
+    activeFilter = f;
+    document.querySelectorAll('.tag-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.filter === f);
+    });
+    renderNotes();
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────
+  function renderNotes() {
+    const q = document.getElementById('search').value.toLowerCase();
+    const container = document.getElementById('notes-container');
+    const filtered = notes.filter(n => {
+      const matchTag  = activeFilter === 'all' || n.tag === activeFilter;
+      const matchText = !q || n.text.toLowerCase().includes(q);
+      return matchTag && matchText;
+    });
+
+    document.getElementById('count-badge').textContent = `${filtered.length} note${filtered.length !== 1 ? 's' : ''}`;
+
+    if (filtered.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <div class="icon">📋</div>
+          <p>${notes.length === 0 ? 'No notes yet — add your first thought above.' : 'No notes match this filter.'}</p>
+        </div>`;
+      return;
+    }
+
+    container.innerHTML = filtered.map(n => {
+      const d = new Date(n.ts);
+      const dateStr = d.toLocaleDateString('en-IN', {day:'numeric',month:'short',year:'numeric'});
+      const timeStr = d.toLocaleTimeString('en-IN', {hour:'2-digit',minute:'2-digit'});
+      const tagLabel = { idea:'💡 Idea', trade:'📈 Trade', risk:'⚠️ Risk', macro:'🌍 Macro', todo:'✅ Todo', general:'General' }[n.tag] || n.tag;
+      return `
+        <div class="note-card" id="card-${n.id}">
+          <div class="note-meta">
+            <span class="note-time">${dateStr} · ${timeStr}</span>
+            <span class="note-tag-badge tag-${n.tag}">${tagLabel}</span>
+          </div>
+          <div class="note-actions">
+            <button class="btn-sm" onclick="editNote(${n.id})">Edit</button>
+            <button class="btn-sm danger" onclick="deleteNote(${n.id})">Delete</button>
+          </div>
+          <div class="note-body" id="body-${n.id}">${escHtml(n.text)}</div>
+        </div>`;
+    }).join('');
+  }
+
+  function escHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+  }
+
+  // ── Edit ────────────────────────────────────────────────────────────────
+  function editNote(id) {
+    const note = notes.find(n => n.id === id);
+    if (!note) return;
+    const bodyEl = document.getElementById('body-'+id);
+    const textarea = document.createElement('textarea');
+    textarea.className = 'note-body editing';
+    textarea.value = note.text;
+    textarea.onkeydown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); saveEdit(id, textarea.value); }
+      if (e.key === 'Escape') { renderNotes(); }
+    };
+    bodyEl.replaceWith(textarea);
+    textarea.focus();
+
+    // Replace action buttons temporarily
+    const actions = document.querySelector(`#card-${id} .note-actions`);
+    actions.innerHTML = `
+      <button class="btn-sm" onclick="saveEdit(${id}, document.querySelector('#card-${id} textarea').value)">Save</button>
+      <button class="btn-sm" onclick="renderNotes()">Cancel</button>`;
+  }
+
+  function saveEdit(id, newText) {
+    const note = notes.find(n => n.id === id);
+    if (!note || !newText.trim()) return;
+    note.text = newText.trim();
+    note.edited = new Date().toISOString();
+    save();
+    renderNotes();
+  }
+
+  // ── Delete ──────────────────────────────────────────────────────────────
+  function deleteNote(id) {
+    if (!confirm('Delete this note?')) return;
+    notes = notes.filter(n => n.id !== id);
+    save();
+    renderNotes();
+  }
+
+  // ── Init ─────────────────────────────────────────────────────────────────
+  load();
+</script>
+</body>
+</html>

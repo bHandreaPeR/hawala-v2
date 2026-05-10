@@ -15,12 +15,16 @@ INSTRUMENTS = {
     'BANKNIFTY': {
         'symbol':            'NSE-BANKNIFTY',  # Groww spot symbol (SEGMENT_CASH)
         'underlying_symbol': 'BANKNIFTY',      # for get_expiries() / get_contracts()
-        'lot_size':          30,               # current lot size (post 20-Nov-2024)
-        # Historical lot size changes — used for accurate P&L across backtest periods
+        'lot_size':          30,               # current lot size (post Jan-2026, per NSE/FAOP/70616)
+        # Historical lot size — verified against NSE circulars (FAOP70616 Oct-2025):
+        #   2023-11: SEBI revised lot from 25 → 15 (contract value fell below ₹5L)
+        #   2024-11: SEBI revised lot from 15 → 35 (new ₹15L minimum, NSE circular Nov-2024)
+        #   2026-01: SEBI revised lot from 35 → 30 (NSE/FAOP/70616, effective Jan-27-2026)
         'lot_size_history': [
             ('2020-01-01', '2023-11-19', 25),  # 25 contracts/lot
-            ('2023-11-20', '2024-11-19', 15),  # 15 contracts/lot after Nov-2023 SEBI revision
-            ('2024-11-20', '2099-12-31', 30),  # 30 contracts/lot after Nov-2024 SEBI revision (min ₹15L contract value)
+            ('2023-11-20', '2024-11-19', 15),  # 15 contracts/lot (Nov-2023 SEBI revision)
+            ('2024-11-20', '2026-01-26', 35),  # 35 contracts/lot (Nov-2024 SEBI revision) ← was wrong (30)
+            ('2026-01-27', '2099-12-31', 30),  # 30 contracts/lot (Oct-2025 circular, first expiry Jan-27-2026)
         ],
         'brokerage':         40,               # ₹ per round trip (Groww)
         'slippage':          10,               # pts assumed on entry/exit
@@ -28,15 +32,26 @@ INSTRUMENTS = {
         'max_gap':           400,              # ignore fundamental gaps (pts)
         'margin_per_lot':    75_000,           # approx SPAN + exposure margin (₹)
         'strike_interval':   100,              # ATM strike rounding for options
+        # Expiry: monthly only since Dec-2024 (SEBI removed weekly options)
+        # SEBI changed monthly expiry day: Thu (pre Sep-2025) → Tue (Sep-2025 onwards)
+        # Backtest uses real Groww expiry calendar (injected via _expiry_dates in params)
+        'expiry_dow':        1,                # Tuesday — current expiry day (post Sep-2025)
+        'monthly_only':      True,             # monthly only since Dec-2024
     },
     'NIFTY': {
         'symbol':            'NSE-NIFTY',
         'underlying_symbol': 'NIFTY',
-        'lot_size':          25,               # current lot size (post 24-Nov-2023)
-        # NIFTY lot size history: changed 50→25 on 24-Nov-2023 per SEBI revision
+        'lot_size':          65,               # current lot size (post Jan-2026, NSE/FAOP/70616)
+        # NIFTY lot size — verified against NSE circulars (FAOP70616 Oct-2025):
+        #   2023-11: SEBI revised lot from 50 → 25 (reduced for retail access)
+        #   2024-11: SEBI revised lot from 25 → 75 (SEBI/HO/MRD-PoD2/CIR/P/2024/00181; ₹15L min;
+        #            NIFTY ~24k → 25×24k=₹6L too small → 75×24k=₹18L)
+        #   2026-01: SEBI revised lot from 75 → 65 (Oct-2025 circular NSE/FAOP/70616)
         'lot_size_history': [
-            ('2020-01-01', '2023-11-23', 50),  # 50 contracts/lot before revision
-            ('2023-11-24', '2099-12-31', 25),  # 25 contracts/lot after revision
+            ('2020-01-01', '2023-11-23', 50),  # 50 contracts/lot
+            ('2023-11-24', '2024-11-19', 25),  # 25 contracts/lot (Nov-2023 SEBI revision)
+            ('2024-11-20', '2026-01-05', 75),  # 75 contracts/lot (Nov-2024 SEBI revision; ₹15L min)
+            ('2026-01-06', '2099-12-31', 65),  # 65 contracts/lot (Oct-2025 circular; first weekly Jan-06-2026)
         ],
         'brokerage':         40,
         'slippage':          5,
@@ -44,6 +59,10 @@ INSTRUMENTS = {
         'max_gap':           200,
         'margin_per_lot':    55_000,           # approx SPAN + exposure margin (₹)
         'strike_interval':   50,
+        # SEBI changed NIFTY weekly expiry day: Thu (pre Sep-2025) → Tue (Sep-2025 onwards)
+        # Backtest uses real Groww expiry calendar (injected via _expiry_dates in params)
+        'expiry_dow':        1,                # Tuesday — current expiry day (post Sep-2025)
+        'monthly_only':      False,            # NIFTY has weekly options (all Tuesdays now)
         # Per-instrument strategy param overrides — merged over global STRATEGIES params
         # by backtest/engine.py run_backtest().
         # Gap fill sweep on NIFTY: best combo still ₹-3,194 (37.8% WR) → DO NOT run
@@ -55,6 +74,33 @@ INSTRUMENTS = {
             'VWAP_BAND_PCT':   0.0025,  # 0.25% = ~47 pts at NIFTY 19k (same % as BN)
             'VWAP_STOP_ATR':   0.75,    # wider stop works better on NIFTY
             'VWAP_TARGET_ATR': 1.50,    # 2:1 R:R on NIFTY VWAP
+        },
+    },
+    'SENSEX': {
+        'symbol':            'BSE-SENSEX',
+        'underlying_symbol': 'SENSEX',
+        'exchange':          'BSE',            # BSE instrument — options_fetch uses this
+        'lot_size':          10,               # current lot size
+        'lot_size_history': [
+            ('2020-01-01', '2099-12-31', 10),
+        ],
+        'brokerage':         40,
+        'slippage':          20,               # wider tick on BSE
+        'min_gap':           100,
+        'max_gap':           1500,
+        'margin_per_lot':    80_000,           # approx SPAN proxy (SENSEX ~80k, wing=800)
+        'strike_interval':   100,
+        'expiry_dow':        3,                # Thursday (BSE, confirmed from API data)
+        'monthly_only':      False,            # SENSEX has weekly Thursday options on BSE
+        # Expiry Spread sweep-optimal params (SENSEX-specific, override global expiry_spread params)
+        # Sweep result: gap=50, atr=0.65, wing=800 → 89.3% WR (56 trades, 2023-2026)
+        # Wing=800 vs 600: same WR but ₹54,753 vs ₹44,419 net over 56 trades (+22%)
+        'es_params': {
+            'ES_GAP_THRESHOLD': 50,    # SENSEX moves larger in pts; 50 still gives 56 trades
+            'ES_CALL_ATR':      0.65,
+            'ES_PUT_ATR':       0.65,
+            'ES_WING_WIDTH':    800,   # 800 pts (same WR as 600, +22% net ₹ over study)
+            'ES_MIN_NET_CREDIT': 30,   # 10-lot × 30 = ₹300/lot min — relaxed for wider wing
         },
     },
 }
@@ -150,6 +196,44 @@ STRATEGIES = {
             'WICK_RATIO':    2.0,
         },
     },
+    'expiry_spread': {
+        'module':   'strategies.expiry_spread',
+        'function': 'run_expiry_spread',
+        'params': {
+            # Expiry gate
+            'ES_EXPIRY_ONLY':            True,
+            'ES_DTE_MAX':                1,
+            # Direction filter — sweep winner: gap=30 gives best trade quality/volume balance
+            'ES_GAP_THRESHOLD':          30,    # pts — skip if |gap| < 30 (flat open)
+            # VIX gate — skip explosive VIX (18+ = high breach risk on 2-leg spread)
+            'ES_VIX_MIN':                0.0,   # Include low-VIX (still decent 2-leg premium)
+            'ES_VIX_MAX':                18.0,  # Hard stop at 18 — above = breach territory
+            # Gap sanity cap
+            'ES_MAX_GAP':                400,
+            # Strike selection — SWEEP WINNER: atr=0.65 (further OTM → fewer breaches → 82% WR)
+            'ES_CALL_ATR':               0.65,  # Bear spread short call: spot + 0.65×ATR14
+            'ES_PUT_ATR':                0.65,  # Bull spread short put:  spot − 0.65×ATR14
+            # Wing width — SWEEP WINNER: 300 pts (wider protection → more trades pass credit gate)
+            'ES_WING_WIDTH':             300,   # Wing spread in pts (max loss per lot)
+            # Exit rules
+            'ES_PROFIT_TARGET_PCT':      0.70,  # Exit at 70% of net credit collected
+            'ES_STOP_LOSS_MULT':         2.0,   # Stop when net debit = 2× net credit
+            'ES_BREACH_BUFFER':          30,    # Exit if spot within 30 pts of short strike
+            'ES_ENTRY_AFTER':            '09:30',
+            'ES_SQUAREOFF':              '14:00',
+            # Capital / risk
+            'ES_MIN_NET_CREDIT':         30,    # Skip if net credit < 30 pts
+            'ES_CONSECUTIVE_LOSS_LIMIT': 3,
+            'ES_RISK_PER_TRADE_PCT':     0.05,
+            # Sizing — fixed 1 lot for clean backtest WR comparison
+            'ES_FIXED_LOT':              True,  # set False in live for conviction sizing
+            'ES_VIX_SCALAR_LOW':         0.50,
+            'ES_VIX_SCALAR_MIDLOW':      0.70,
+            'ES_VIX_SCALAR_MID':         1.00,
+            'ES_LOT_MAX':                10,
+            'ES_LOT_MIN':                1,
+        },
+    },
     'iron_condor': {
         'module':   'strategies.iron_condor',
         'function': 'run_iron_condor',
@@ -184,16 +268,17 @@ STRATEGIES = {
             'IC_MIN_NET_CREDIT':         50,       # Skip if net credit < 50 pts (not worth the risk)
             'IC_CONSECUTIVE_LOSS_LIMIT': 2,        # Skip after 2 consecutive expiry losses
             # Capital-aware lot sizing: lots = floor(equity × risk_pct × vix_scalar / margin_per_lot)
+            # margin_per_lot = wing_width × lot_size (exchange SPAN proxy, independent of credit)
             # VIX scalar reduces size in lower-conviction regimes:
             #   LOW (<12)    : 0.50× (stable but less premium — no need to oversize)
             #   MID-LOW(12-15): 0.70× (decent WR, moderate premium)
             #   MID (15-18)  : 1.00× (sweet spot — full deployment)
-            # At ₹9L with 5% risk and ~₹4,200 margin/lot: ~10-16 lots depending on regime
+            # At ₹9L, 5% risk, wing=300, lot=30 → margin=9,000/lot → 5 lots at full VIX
             'IC_RISK_PER_TRADE_PCT':     0.05,     # 5% of equity per trade (max loss bound)
             'IC_VIX_SCALAR_LOW':         0.50,     # Scale factor when VIX < 12
             'IC_VIX_SCALAR_MIDLOW':      0.70,     # Scale factor when VIX 12-15
             'IC_VIX_SCALAR_MID':         1.00,     # Scale factor when VIX 15-18 (full size)
-            'IC_LOT_MAX':                50,       # Hard cap (liquidity ceiling ~20 lots in practice)
+            'IC_LOT_MAX':                10,       # Hard cap: 10 lots max (~₹9L cover with real broker margin)
             'IC_LOT_MIN':                1,        # Always trade at least 1 lot
             # Legacy fixed-lot params (unused when IC_RISK_PER_TRADE_PCT is set)
             'IC_CREDIT_BONUS_THRESH':    0.35,     # kept for sweep compatibility
